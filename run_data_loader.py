@@ -28,9 +28,9 @@ def main():
         data_file_names = {
         "shoeboxes": "standardized_shoeboxes_subset.pt",
         "counts": "raw_counts_subset.pt.pt",
-        "metadata": "shoebox_features_subset.pt.pt",
+        "metadata": "shoebox_features_subset.pt",
         "masks": "masks_subset.pt",
-        "true_reference": "metadata_subset.pt.pt",
+        "true_reference": "metadata_subset.pt",
         }
         settings = DataLoaderSettings(data_directory=args.data_directory,
                                     test_set_split=0.01
