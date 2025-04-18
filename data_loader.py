@@ -25,18 +25,31 @@ class DataLoaderSettings():
         "masks": "mask_subset.pt",
         "true_reference": "true_reference_subset.pt",
     })
+    metadata_indices: dict = dataclasses.field(default_factory=lambda: {
+        "h": 0,
+        "k": 1,
+        "l": 2,
+        "d": 3,
+        "x": 4,
+        "y": 5,
+        "z": 6,
+    })
+    metadata_keys_to_keep: list = dataclasses.field(default_factory=lambda: [
+        "x", "y"
+    ])
+
     validation_set_split: float = 0.2
-    test_set_split: float = 0.1
+    test_set_split: float = 0.5
     number_of_images_per_batch: int = 20
-    number_of_shoeboxes_per_batch: int = 100
+    number_of_shoeboxes_per_batch: int = 16
     number_of_batches: int = 100
-    number_of_workers: int = 0
+    number_of_workers: int = 3
     pin_memory: bool = True
-    prefetch_factor: int|None = None
+    prefetch_factor: int|None = 2
     shuffle_indices: bool = True
     shuffle_groups: bool = True
     optimize_shoeboxes_per_batch: bool = True
-    append_image_id_to_metadata: bool = True
+    append_image_id_to_metadata: bool = False
     verbose: bool = True
 
 
@@ -45,7 +58,6 @@ class CrystallographicDataLoader():
     train_data_set: torch.utils.data.dataset.Subset
     validation_data_set: torch.utils.data.dataset.Subset
     test_data_set: torch.utils.data.dataset.Subset
-    validation_set_split: float
     settings: DataLoaderSettings
 
     def __init__(
@@ -55,18 +67,25 @@ class CrystallographicDataLoader():
         self.settings = settings
 
     def _get_raw_shoebox_data_(self):
-        shoeboxes = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["shoeboxes"])
-        )
-        counts = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["counts"])
-        )
         metadata = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["metadata"])
+            os.path.join(self.settings.data_directory, self.settings.data_file_names["metadata"]), weights_only=True
         )
+        if len(self.settings.metadata_keys_to_keep) < len(self.settings.metadata_indices):
+            metadata = self._cut_metadata(metadata)
+        print("Metadata shape:", metadata.shape)
+
+        counts = torch.load(
+            os.path.join(self.settings.data_directory, self.settings.data_file_names["counts"]), weights_only=True
+        )
+        print("counts shape:", counts.shape)
         dead_pixel_mask = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["masks"])
+            os.path.join(self.settings.data_directory, self.settings.data_file_names["masks"]), weights_only=True
         )
+        print("dead_pixel_mask shape:", dead_pixel_mask.shape)
+        shoeboxes = torch.load(
+            os.path.join(self.settings.data_directory, self.settings.data_file_names["shoeboxes"]), weights_only=True
+        )
+        print("shoeboxes shape:", shoeboxes.shape)
         self.full_data_set = TensorDataset(
             shoeboxes, metadata, dead_pixel_mask, counts
         )
@@ -79,7 +98,12 @@ class CrystallographicDataLoader():
             data_as_list[1] = torch.cat(
                 (data_as_list[1], torch.tensor(image_ids).unsqueeze(1)), dim=1
             )
-            self.full_data_set.tensors = tuple(data_as_list)	
+            self.full_data_set.tensors = tuple(data_as_list)
+    
+    def _cut_metadata(self, metadata: torch.Tensor) -> torch.Tensor:
+        indices_to_keep = [self.settings.metadata_indices[i] for i in self.settings.metadata_indices_to_keep]
+        return torch.index_select(metadata, dim=1, index=indices_to_keep)
+    
 
     def _clean_data_(self):
         pass
@@ -146,11 +170,6 @@ class CrystallographicDataLoader():
                      image_id_to_indices: dict, 
                      settings: DataLoaderSettings,
             ) -> None: 
-            if len(image_id_to_indices) < settings.number_of_images_per_batch:
-                raise ValueError(
-                    "The number of images has to be larger " \
-                    "than the number of images per batch."
-                )
             self.image_id_to_indices = image_id_to_indices
             self.settings = settings
             self.batches = self._get_batches()
@@ -178,18 +197,26 @@ class CrystallographicDataLoader():
                         ) // len(self.image_id_to_indices))
                 )
                 number_of_images_required = -(-self.settings.number_of_shoeboxes_per_batch//average_shoeboxes_per_image)
+
                 if self.settings.verbose:
                     print("Average shoeboxes per image:", average_shoeboxes_per_image)
                     print("Number of images per batch:", number_of_images_required)
                 if number_of_images_required > len(self.image_id_to_indices):
                     raise ValueError(
-                        f"The number of images required = {number_of_images_required} is larger than the number of images = {len(self.image_id_to_indices)}."
+                        f"The number of images required = {number_of_images_required} "
+                        f"is larger than the number of images = {len(self.image_id_to_indices)}."
                     )
-
-                return [self._list_of_shoebox_indices_by_image(
+                for _ in range(self.settings.number_of_batches):
+                    batch = self._list_of_shoebox_indices_by_image(
                                     number_of_images_per_batch=number_of_images_required
                                         )[:self.settings.number_of_shoeboxes_per_batch]
-                                        for _ in range(self.settings.number_of_batches)]
+                    while len(batch) < self.settings.number_of_shoeboxes_per_batch:
+                        batch += self._list_of_shoebox_indices_by_image(
+                                    number_of_images_per_batch=1
+                                        )[:self.settings.number_of_shoeboxes_per_batch - len(batch)]
+                    batches.append(batch)
+
+                return batches
             else:
                 return [self._list_of_shoebox_indices_by_image(
                     number_of_images_per_batch=self.settings.number_of_images_per_batch
@@ -228,17 +255,21 @@ class CrystallographicDataLoader():
             prefetch_factor=self.settings.prefetch_factor,
         )
     
-def test(settings: DataLoaderSettings) -> None:
+def test(settings: DataLoaderSettings):
+    print("enter test")
     dataloader = CrystallographicDataLoader(settings=settings)
-    print("Loading data")	
+    print("Loading data ...")	
     dataloader.load_data_()
+    print("Data loaded successfully.")
         
     test_data = dataloader.load_data_set_batched_by_image(
         data_set_to_load=dataloader.test_data_set
     )
+    print("Test data loaded successfully.")
     for batch in test_data:
         shoeboxes_batch, metadata_batch, dead_pixel_mask_batch, counts_batch = batch
         print("Batch shoeboxes shape:", shoeboxes_batch.shape)
+    return test_data
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Pass DataLoader settings")
