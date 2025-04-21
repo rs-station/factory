@@ -101,7 +101,7 @@ class CrystallographicDataLoader():
             self.full_data_set.tensors = tuple(data_as_list)
     
     def _cut_metadata(self, metadata: torch.Tensor) -> torch.Tensor:
-        indices_to_keep = [self.settings.metadata_indices[i] for i in self.settings.metadata_indices_to_keep]
+        indices_to_keep = torch.tensor([self.settings.metadata_indices[i] for i in self.settings.metadata_keys_to_keep], dtype=torch.long)
         return torch.index_select(metadata, dim=1, index=indices_to_keep)
     
 
