@@ -40,9 +40,9 @@ class DataLoaderSettings():
 
     validation_set_split: float = 0.2
     test_set_split: float = 0.5
-    number_of_images_per_batch: int = 20
-    number_of_shoeboxes_per_batch: int = 16
-    number_of_batches: int = 100
+    number_of_images_per_batch: int = 3
+    number_of_shoeboxes_per_batch: int = 4
+    number_of_batches: int = 10
     number_of_workers: int = 3
     pin_memory: bool = True
     prefetch_factor: int|None = 2
@@ -70,8 +70,8 @@ class CrystallographicDataLoader():
         metadata = torch.load(
             os.path.join(self.settings.data_directory, self.settings.data_file_names["metadata"]), weights_only=True
         )
-        if len(self.settings.metadata_keys_to_keep) < len(self.settings.metadata_indices):
-            metadata = self._cut_metadata(metadata)
+        # if len(self.settings.metadata_keys_to_keep) < len(self.settings.metadata_indices):
+        #     metadata = self._cut_metadata(metadata)
         print("Metadata shape:", metadata.shape)
 
         counts = torch.load(
@@ -85,6 +85,7 @@ class CrystallographicDataLoader():
         shoeboxes = torch.load(
             os.path.join(self.settings.data_directory, self.settings.data_file_names["shoeboxes"]), weights_only=True
         )
+        shoeboxes = self._clean_shoeboxes_(shoeboxes)
         print("shoeboxes shape:", shoeboxes.shape)
         self.full_data_set = TensorDataset(
             shoeboxes, metadata, dead_pixel_mask, counts
@@ -105,8 +106,9 @@ class CrystallographicDataLoader():
         return torch.index_select(metadata, dim=1, index=indices_to_keep)
     
 
-    def _clean_data_(self):
-        pass
+    def _clean_shoeboxes_(self, shoeboxes: torch.Tensor):
+        shoebox_mask = (shoeboxes[..., -1].sum(dim=1) < 150000)
+        return shoeboxes[shoebox_mask]
 
     def _split_full_data_(self) -> None:
         full_data_set_length = len(self.full_data_set)
@@ -127,7 +129,7 @@ class CrystallographicDataLoader():
         self._get_raw_shoebox_data_()
         if self.settings.append_image_id_to_metadata:
             self.append_image_id_to_metadata_()
-        self._clean_data_()
+        # self._clean_data_()
         self._split_full_data_()
 
     def _get_image_ids_from_shoeboxes(self, shoebox_data_set: torch.Tensor) -> list:
