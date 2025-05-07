@@ -26,10 +26,10 @@ class DataLoaderSettings():
         "true_reference": "true_reference_subset.pt",
     })
     metadata_indices: dict = dataclasses.field(default_factory=lambda: {
-        "h": 0,
-        "k": 1,
-        "l": 2,
-        "d": 3,
+        "d": 0,
+        "h": 1,
+        "k": 2,
+        "l": 3,
         "x": 4,
         "y": 5,
         "z": 6,
@@ -39,7 +39,7 @@ class DataLoaderSettings():
     ])
 
     validation_set_split: float = 0.2
-    test_set_split: float = 0.5
+    test_set_split: float = 0
     number_of_images_per_batch: int = 3
     number_of_shoeboxes_per_batch: int = 4
     number_of_batches: int = 10
@@ -70,8 +70,6 @@ class CrystallographicDataLoader():
         metadata = torch.load(
             os.path.join(self.settings.data_directory, self.settings.data_file_names["metadata"]), weights_only=True
         )
-        # if len(self.settings.metadata_keys_to_keep) < len(self.settings.metadata_indices):
-        #     metadata = self._cut_metadata(metadata)
         print("Metadata shape:", metadata.shape)
 
         counts = torch.load(
@@ -85,10 +83,15 @@ class CrystallographicDataLoader():
         shoeboxes = torch.load(
             os.path.join(self.settings.data_directory, self.settings.data_file_names["shoeboxes"]), weights_only=True
         )
-        shoeboxes = self._clean_shoeboxes_(shoeboxes)
+        # shoeboxes,dead_pixel_mask, counts, metadata = self._clean_shoeboxes_(shoeboxes, dead_pixel_mask, counts, metadata)
         print("shoeboxes shape:", shoeboxes.shape)
+        dials_reference = torch.load(
+            os.path.join(self.settings.data_directory, self.settings.data_file_names["true_reference"]), weights_only=True
+        )
+        hkl = metadata[:,1:4]
+        print("hkl shape", hkl.shape)
         self.full_data_set = TensorDataset(
-            shoeboxes, metadata, dead_pixel_mask, counts
+            shoeboxes, metadata, dead_pixel_mask, counts, hkl, dials_reference
         )
 
     def append_image_id_to_metadata_(self) -> None:
@@ -106,9 +109,9 @@ class CrystallographicDataLoader():
         return torch.index_select(metadata, dim=1, index=indices_to_keep)
     
 
-    def _clean_shoeboxes_(self, shoeboxes: torch.Tensor):
+    def _clean_shoeboxes_(self, shoeboxes: torch.Tensor, dead_pixel_mask, counts, metadata):
         shoebox_mask = (shoeboxes[..., -1].sum(dim=1) < 150000)
-        return shoeboxes[shoebox_mask]
+        return (shoeboxes[shoebox_mask], dead_pixel_mask[shoebox_mask], counts[shoebox_mask], metadata[shoebox_mask])
 
     def _split_full_data_(self) -> None:
         full_data_set_length = len(self.full_data_set)
@@ -256,6 +259,26 @@ class CrystallographicDataLoader():
             pin_memory=self.settings.pin_memory,
             prefetch_factor=self.settings.prefetch_factor,
         )
+    
+    def load_data_for_logging_during_training(self, number_of_shoeboxes_to_log: int = 5) -> torch.utils.data.dataloader.DataLoader:
+        image_id_to_indices = self._map_images_to_shoeboxes(
+                shoebox_data_set=self.full_data_set.tensors[0][self.train_data_set.indices]
+            )
+        settings = dataclasses.replace(self.settings, number_of_shoeboxes_per_batch=number_of_shoeboxes_to_log, number_of_batches=1)
+        batch_by_image_sampler = self.BatchByImageSampler(
+            image_id_to_indices=image_id_to_indices,
+            settings=settings
+            )
+        return DataLoader(
+            self.train_data_set,
+            batch_sampler=batch_by_image_sampler,
+            num_workers=self.settings.number_of_workers,
+            pin_memory=self.settings.pin_memory,
+            prefetch_factor=self.settings.prefetch_factor,
+            persistent_workers=True
+        )
+
+
     
 def test(settings: DataLoaderSettings):
     print("enter test")
