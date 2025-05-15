@@ -1,7 +1,8 @@
 import sys, os
 
+# only needed for my local run
 repo_root = os.path.abspath(os.path.join(__file__, os.pardir))
-inner_pkg = os.path.join(repo_root, "abismal_torch")   # ← now points to factory/factory/abismal_torch
+inner_pkg = os.path.join(repo_root, "abismal_torch")  
 
 sys.path.insert(0, inner_pkg)
 sys.path.insert(0, repo_root)
@@ -13,22 +14,27 @@ import torch
 import numpy as np
 import lightning as L
 import dataclasses
-import encoder
+# import encoder
+import simplest_encode
 import torch.nn.functional as F
 from networks import *
 import distributions
 import loss_functionality
 import get_protein_data
 from abismal_torch.prior import WilsonPrior
-from abismal_torch.symmetry.reciprocal_asu import ReciprocalASU, ReciprocalASUGraph
+# from abismal_torch.symmetry.reciprocal_asu import ReciprocalASU, ReciprocalASUGraph
+from rasu import *
 from abismal_torch.likelihood import NormalLikelihood
 from abismal_torch.surrogate_posterior import FoldedNormalPosterior
 from abismal_torch.merging import VariationalMergingModel
 from abismal_torch.scaling import ImageScaler
 
 from lightning.pytorch.loggers import WandbLogger
-from lightning import Callback
+from lightning.pytorch.callbacks import Callback
 import wandb
+
+from torchvision.transforms import ToPILImage
+from lightning.pytorch.utilities import grad_norm
 import matplotlib.pyplot as plt
 wandb_logger = WandbLogger(project="full-model", name="testing-1")
 
@@ -45,6 +51,7 @@ class Settings():
         default_factory=lambda: torch.distributions.HalfNormal(1)
     )
     build_intensity_prior_distribution = WilsonPrior
+    intensity_prior_distibution: WilsonPrior = dataclasses.field(init=False)
     # intensity_distribution_initial_location: float
     # intensity_distribution_initial_scale: float
     mvn_mean_prior_distribution = torch.distributions.normal.Normal(loc=torch.tensor(0.0), scale=torch.tensor(5.0))
@@ -52,19 +59,40 @@ class Settings():
     mvn_cov_scale_prior_distribution = torch.distributions.half_normal.HalfNormal(scale=torch.tensor(0.3))
     optimizer = torch.optim.AdamW
     dmodel = 64
-    batch_size = 4
+    # batch_size = 4
     number_of_epochs = 5
     number_of_mc_samples = 100
 
-    data_directory = r"C:\Users\Flavi\Desktop\Thesis_Data" #"/n/hekstra_lab/people/aldama/subset"
-    data_file_names: dict = dataclasses.field(default_factory=lambda: {
-        "shoeboxes": "standardized_shoeboxes_subset.pt",
-        "counts": "raw_counts_subset.pt",
-        "metadata": "shoebox_features_subset.pt",
-        "masks": "masks_subset.pt",
-        "true_reference": "metadata_subset.pt",
-    })
+    # data_directory = r"C:\Users\Flavi\Desktop\Thesis_Data" #"/n/hekstra_lab/people/aldama/subset"
+    # data_file_names: dict = dataclasses.field(default_factory=lambda: {
+    #     "shoeboxes": "standardized_shoeboxes_subset.pt",
+    #     "counts": "raw_counts_subset.pt",
+    #     "metadata": "shoebox_features_subset.pt",
+    #     "masks": "masks_subset.pt",
+    #     "true_reference": "metadata_subset.pt",
+    # })
+
+    data_directory = "/n/hekstra_lab/people/aldama/subset"
+    data_file_names = {
+    "shoeboxes": "standardized_shoeboxes_subset.pt",
+    "counts": "raw_counts_subset.pt",
+    "metadata": "shoebox_features_subset.pt",
+    "masks": "masks_subset.pt",
+    "true_reference": "metadata_subset.pt",
+    }
+
     protein_pdb_url = "https://files.rcsb.org/download/9B7C.cif"
+    rac: ReciprocalASUCollection = dataclasses.field(init=False)
+    def __post_init__(self):
+        pdb_data = get_protein_data.get_protein_data(self.protein_pdb_url)
+        self.rac = ReciprocalASUGraph(*[ReciprocalASU(
+            cell=pdb_data["unit_cell"],
+            spacegroup=pdb_data["spacegroup"],
+            dmin=float(pdb_data["dmin"]),
+            anomalous=True,
+        )])
+        self.intensity_prior_distibution = self.build_intensity_prior_distribution(self.rac)
+
 
 @dataclasses.dataclass
 class LossSettings():
@@ -79,30 +107,45 @@ class LossSettings():
 class Model(L.LightningModule):
 
     dataloader: data_loader.CrystallographicDataLoader
-    shoebox_encoder: encoder.CNN_3d
-    metadata_encoder: encoder.MLPMetadataEncoder
+    shoebox_encoder: simplest_encode.ShoeboxEncoder #encoder.CNN_3d
+    metadata_encoder: simplest_encode.MLPMetadataEncoder #encoder.MLPMetadataEncoder
     scale_model: MLPScale
     lrmvn_distribution_for_shoebox_profile: distributions.LRMVN_Distribution
     background_distribution: distributions.HalfNormalDistribution
-    prior_intensity_distribution: WilsonPrior
     surrogate_posterior: FoldedNormalPosterior
 
     def __init__(self, settings: Settings, loss_settings: LossSettings, dataloader: data_loader.CrystallographicDataLoader):
         super().__init__()
         self.settings = settings
         self.dataloader = dataloader
-        self.shoebox_encoder = encoder.CNN_3d()
-        self.metadata_encoder = encoder.MLPMetadataEncoder()
-        self.scale_model = MLPScale(input_dimension=self.settings.dmodel)
+        self.shoebox_encoder = simplest_encode.ShoeboxEncoder() #encoder.CNN_3d()
+        self.metadata_encoder = simplest_encode.MLPMetadataEncoder(feature_dim=2, output_dims=self.settings.dmodel) #encoder.MLPMetadataEncoder()
+        self.scale_model = MLPScale(input_dimension=self.settings.dmodel, hidden_dimension=self.settings.dmodel)
         self.lrmvn_distribution_for_shoebox_profile = self.settings.build_shoebox_profile_distribution()
         self.background_distribution = self.settings.build_background_distribution(dmodel=self.settings.dmodel)
-        self.rac = self.build_rac()
-        self.prior_intensity_distribution = WilsonPrior(self.rac)
-        # print("rac size", self.rac.size)
         self.surrogate_posterior = self.compute_intensity_distribution()
         self.optimizer = self.settings.optimizer(self.parameters())
-        self.loss_function = loss_functionality.LossFunction(settings=settings, loss_settings=loss_settings)
+        self.loss_settings = loss_settings
+        self.loss_function = loss_functionality.LossFunction(settings=settings, loss_settings=self.loss_settings)
+        self.loss = torch.Tensor(0)
 
+    def to(self, *args, **kwargs):
+        super().to(*args, **kwargs)
+        device = next(self.parameters()).device
+        self._move_settings_(self.settings)
+        self._move_settings_(self.loss_settings)
+        return self
+
+    def _move_settings_(self, settings:dataclasses.dataclass):
+        device = next(self.parameters()).device
+        moved = {}
+        for field in dataclasses.fields(self.settings):
+            val = getattr(self.settings, field.name)
+            if isinstance(val, torch.Tensor):
+                moved[field.name] = val.to(device)
+        # 3) recreate a new dataclass with those moved fields
+        self.settings = dataclasses.replace(self.settings, **moved)
+        return self
 
     def compute_scale(self, image_representation, metadata_representation) -> torch.distributions.Normal:
         joined_representation = self._add_representation_(image_representation, metadata_representation) # (batch_size, dmodel)
@@ -135,21 +178,15 @@ class Model(L.LightningModule):
     def compute_photon_rate(self, scale_distribution, background_distribution, profile, surrogate_posterior, ordered_miller_indices, log_images) -> torch.Tensor: 
 
         samples_surrogate_posterior = surrogate_posterior.rsample([self.settings.number_of_mc_samples]) # ( number of samples, rac_size)
-        print("shape intensity", samples_surrogate_posterior.shape)
 
-        samples_scale = scale_distribution.rsample([self.settings.number_of_mc_samples]).unsqueeze(-1).permute(1, 0, 2)
-        print("shape scale", samples_scale.shape) #(batch_size, number_of_samples, 1)
-        samples_profile = profile / profile.sum(dim=-1, keepdim=True) + 1e-10
-        print("profile shape", samples_profile.shape) # (batch_size, number of samples, pixels)
+        samples_scale = scale_distribution.rsample([self.settings.number_of_mc_samples]).unsqueeze(-1).permute(1, 0, 2) #(batch_size, number_of_samples, 1)
+        samples_profile = profile / profile.sum(dim=-1, keepdim=True) + 1e-10 # (batch_size, number of samples, pixels)
 
-        samples_background = background_distribution.rsample([self.settings.number_of_mc_samples]).permute(1, 0, 2)
-        print("shape backgr", samples_background.shape)
+        samples_background = background_distribution.rsample([self.settings.number_of_mc_samples]).permute(1, 0, 2) #(batch_size, number_of_samples, 1)
 
-        print("ordered millder indices", ordered_miller_indices.shape)
-
-        print("indices type", ordered_miller_indices)
-        samples_predicted_structure_factor = self.surrogate_posterior.rac.reciprocal_asus[0].gather(
-            source=samples_surrogate_posterior.T, H=ordered_miller_indices.to(torch.int)
+        rasu_ids = surrogate_posterior.rac.rasu_ids[0]
+        samples_predicted_structure_factor = self.surrogate_posterior.rac.gather(
+            source=samples_surrogate_posterior.T, rasu_id=rasu_ids, H=ordered_miller_indices.to(torch.int)
         ).unsqueeze(-1)
         print("gathered structure factor samples", samples_predicted_structure_factor.shape)
 
@@ -161,25 +198,12 @@ class Model(L.LightningModule):
 
         # return samples_scale * samples_profile + samples_background  # [batch_size, mc_samples, pixels]
 
-    def compute_structure_factors(self):
-        pass
-
-    def build_rac(self):
-        pdb_data = get_protein_data.get_protein_data(self.settings.protein_pdb_url)
-        rasus = [ReciprocalASU(
-            cell=pdb_data["unit_cell"],
-            spacegroup=pdb_data["spacegroup"],
-            dmin=float(pdb_data["dmin"]),
-            anomalous=True,
-        )]
-        return ReciprocalASUGraph(*rasus)
-
     def compute_intensity_distribution(self):
-        initial_mean = self.prior_intensity_distribution.distribution().mean() # self.settings.intensity_distribution_initial_location
+        initial_mean = self.settings.intensity_prior_distibution.distribution().mean() # self.settings.intensity_distribution_initial_location
         print("intensity folded normal mean shape", initial_mean.shape)
         initial_scale = 0.05 * initial_mean # self.settings.intensity_distribution_initial_scale
         surrogate_posterior = FoldedNormalPosterior.from_unconstrained_loc_and_scale(
-            rac=self.rac, loc=initial_mean, scale=initial_scale # epsilon=settings.epsilon
+            rac=self.settings.rac, loc=initial_mean, scale=initial_scale # epsilon=settings.epsilon
         )
 
         #####
@@ -193,12 +217,17 @@ class Model(L.LightningModule):
         return surrogate_posterior
     
     def _cut_metadata(self, metadata) -> torch.Tensor:
-        return torch.index_select(metadata, dim=1, index=torch.tensor([4,5]))
+        device = next(self.parameters()).device
+        return torch.index_select(metadata, dim=1, index=torch.tensor([4,5], device=device))
 
     def forward(self, batch, log_images=False):
         shoeboxes_batch, metadata_batch, dead_pixel_mask_batch, counts_batch, hkl_batch, dials_reference_batch = batch
+        print("PLACE shoeboxes on", shoeboxes_batch.device)
 
-        shoebox_representation = self.shoebox_encoder(shoeboxes_batch) # (batch_size, dmodel)
+        # shoebox_representation = self.shoebox_encoder(shoeboxes_batch) # (batch_size, dmodel)
+        standardized_counts = shoeboxes_batch[:,:,-1].reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21)
+        print("sb shape", standardized_counts.shape)
+        shoebox_representation = self.shoebox_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
         print("shoebox representation:", shoebox_representation.shape)
 
         metadata_representation = self.metadata_encoder(self._cut_metadata(metadata_batch).float()) # (batch_size, dmodel)
@@ -208,6 +237,11 @@ class Model(L.LightningModule):
 
         image_representation = torch.max(joined_shoebox_representation, dim=0, keepdim=True)[0] # (1, dmodel)
         print("image rep (1, dmodel)", image_representation.shape)
+
+        if torch.isnan(image_representation).any():
+            raise ValueError("MLP image_representation produced NaNs!")
+        if torch.isnan(metadata_representation).any():
+            raise ValueError("MLP metadata_representation produced NaNs!")
 
         scale_distribution = self.compute_scale(image_representation=image_representation, metadata_representation=metadata_representation) #  torch.distributions.Normal instance
         shoebox_profile = self.compute_shoebox_profile(shoebox_representation=shoebox_representation, image_representation=image_representation)
@@ -225,14 +259,21 @@ class Model(L.LightningModule):
         if log_images:
             return (shoeboxes_batch, photon_rate, dials_reference_batch)
 
-        return (counts_batch, dead_pixel_mask_batch, photon_rate, background_distribution, surrogate_posterior, 
+
+        return (counts_batch, dead_pixel_mask_batch, hkl_batch, photon_rate, background_distribution, surrogate_posterior, 
                 self.lrmvn_distribution_for_shoebox_profile.mvn_mean_distribution, self.lrmvn_distribution_for_shoebox_profile.mvn_cov_factor_distribution, self.lrmvn_distribution_for_shoebox_profile.mvn_cov_scale_distribution)
     
     def training_step(self, batch):
         output = self(batch=batch)
-        loss = self.loss_function(*output)
-        self.logger.experiment.log({"train_loss": loss})
-        return loss
+        self.loss = self.loss_function(*output)
+        # self.logger.experiment.log({"train_loss": self.loss})
+        self.log("train/loss_step", self.loss, on_step=True, on_epoch=True)
+        norms = grad_norm(self, norm_type=2)
+        for name, norm in norms.items():
+            self.log(f"grad_norm/{name}", norm)
+
+        print("Loss: ", self.loss)
+        return self.loss
     
     def configure_optimizers(self):
         return self.optimizer
@@ -241,21 +282,70 @@ class Model(L.LightningModule):
         return self.dataloader.load_data_set_batched_by_image(
         data_set_to_load=self.dataloader.validation_data_set,
     )
+
+class LossLogging(Callback):
+    
+    def __init__(self):
+        super().__init__()
+        self.loss_per_epoch: float = 0
+        self.count_batches: int = 0
+    
+    # def on_train_epoch_end(self, trainer, pl_module):
+    #     pl_module.logger.experiment.log({"train_loss_per_epoch": self.loss_per_epoch/self.count_batches}, step=trainer.current_epoch)
+    #     self.loss_per_epoch = 0
+    #     self.count_batches = 0
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        avg = trainer.callback_metrics["train/loss_step_epoch"]
+        pl_module.log("train/loss_epoch", avg, on_step=False, on_epoch=True)
+
+
+    # def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
+    #     self.loss_per_epoch += pl_module.loss
+    #     self.count_batches += 1
+
     
 class Plotting(Callback):
 
     def __init__(self):
+        super().__init__()
         self.fixed_batch = None
 
     @staticmethod
     def make_image(image):
         fig, ax = plt.subplots()
-        ax.imshow(image.cpu().numpy())  # convert CHW to HWC
+        _image_cpu = image.cpu().tolist()
+        ax.imshow(_image_cpu)  # convert CHW to HWC
         ax.axis("off")
         return fig
+        # return ToPILImage()(image.cpu())
 
     def on_fit_start(self, trainer, pl_module):
-        self.fixed_batch = next(iter(pl_module.dataloader.load_data_for_logging_during_training()))
+        device = next(pl_module.parameters()).device
+        _raw_batch = next(iter(pl_module.dataloader.load_data_for_logging_during_training()))
+        _raw_batch = [_batch_item.to(device) for _batch_item in _raw_batch]
+        self.fixed_batch = tuple(_raw_batch)
+
+    # def on_train_epoch_end(self, trainer, pl_module):
+    #     with torch.no_grad():
+    #         shoeboxes_batch, photon_rate_output, dials_reference = pl_module(self.fixed_batch, log_images=True)
+    #         dials_id = dials_reference[:, -1]
+    #         photon_rate, profile = photon_rate_output
+    #         batch_size = shoeboxes_batch.size(0)
+
+    #         raw_images     = [wandb.Image( self.make_image(shoeboxes_batch[b,:, -1].reshape(3,21,21)[1:2].squeeze()) )
+    #                         for b in range(batch_size)]
+    #         profile_images = [wandb.Image( self.make_image(profile[b,0,:].reshape(3,21,21)[1:2].squeeze()) )
+    #                         for b in range(batch_size)]
+    #         rate_images    = [wandb.Image( self.make_image(photon_rate[b,0,:].reshape(3,21,21)[1:2].squeeze()) )
+    #                         for b in range(batch_size)]
+
+    #         pl_module.logger.experiment.log({
+    #             f"raw_shoebox/epoch_{trainer.current_epoch}":     raw_images,
+    #             f"profile/epoch_{trainer.current_epoch}":       profile_images,
+    #             f"photon_rate/epoch_{trainer.current_epoch}":   rate_images,
+    #         }, step=trainer.global_step)
+
 
     def on_train_epoch_end(self, trainer, pl_module):
         with torch.no_grad():
@@ -277,64 +367,12 @@ class Plotting(Callback):
             table.add_data("photon rate",  *rate_images)
 
             # log the table
-            pl_module.logger.experiment.log({"Image Grid": table},
-                                            step=trainer.global_step)            
+            # pl_module.logger.experiment.log({"Image Grid": table},
+            #                                 step=trainer.global_step) 
+            # pl_module.logger.experiment.log({"Image Grid": table},
+            #                                 step=trainer.global_step)
+            pl_module.logger.experiment.log({"Image Grid": table}, step=trainer.global_step)
             print("logged images")
-
-# class Plotting(Callback):
-
-#     def __init__(self):
-#         self.fixed_batch = None
-
-#     @staticmethod
-#     def make_image(image: torch.Tensor) -> plt.Figure:
-#         fig, ax = plt.subplots()
-#         ax.imshow(image.cpu().numpy(), cmap="gray")  # if single-channel
-#         ax.axis("off")
-#         return fig
-
-#     def on_fit_start(self, trainer, pl_module):
-#         # grab one batch for visualization
-#         self.fixed_batch = next(
-#             iter(pl_module.dataloader.load_data_for_logging_during_training())
-#         )
-
-#     def on_train_epoch_end(self, trainer, pl_module):
-#         with torch.no_grad():
-#             shoeboxes, (photon_rate, profile), dials_reference = pl_module(
-#                 self.fixed_batch, log_images=True
-#             )
-#             dials_id = dials_reference[:, -1].long()
-#             images = []
-
-#             batch_size = shoeboxes.size(0)
-#             for i in range(batch_size):
-#                 example_id = int(dials_id[i])
-
-#                 # pick out the center‐slice (channel 1) of the 3×21×21 shoebox
-#                 raw_slice = shoeboxes[i, 1, :, :].unsqueeze(0)
-#                 prof_slice = profile[i, 0].reshape(3, 21, 21)[1].unsqueeze(0)
-#                 rate_slice = photon_rate[i, 0].reshape(3, 21, 21)[1].unsqueeze(0)
-
-#                 # turn each into a figure
-#                 fig_raw  = self.make_image(raw_slice)
-#                 fig_prof = self.make_image(prof_slice)
-#                 fig_rate = self.make_image(rate_slice)
-
-#                 # now, **caption goes inside** wandb.Image()
-#                 images.extend([
-#                     wandb.Image(fig_raw,  caption=f"raw shoebox  — ID {example_id}"),
-#                     wandb.Image(fig_prof, caption=f"profile       — ID {example_id}"),
-#                     wandb.Image(fig_rate, caption=f"photon rate  — ID {example_id}")
-#                 ])
-
-#             # log them all at once, including the step so WandB knows where to put them
-#             pl_module.logger.experiment.log(
-#                 {"Profiles": images},
-#                 step=trainer.global_step
-#             )
-
-#             print("logged images")
 
 def run():
     settings = Settings()
@@ -348,8 +386,20 @@ def run():
     dataloader.load_data_()
     print("Data loaded successfully.")
 
+    # from torch.utils.data import DataLoader
+    # loader = DataLoader(
+    #         dataloader.train_data_set,
+    #         batch_size=10,
+    #     )
+    # dataloader=loader
+    # print("sanity check loader", len(loader), list(loader)[0][0].shape)
+
 
     model = Model(settings=settings, loss_settings=loss_settings, dataloader=dataloader)
+
+    # trainer = L.pytorch.Trainer(logger=wandb_logger,max_epochs=5, accelerator="auto")
+    # trainer.fit(model, train_dataloaders=loader)
+   
     # checkpoint_callback = L.Callback.ModelCheckpoint(
     #     monitor="val_loss",
     #     save_top_k=1,
@@ -357,10 +407,12 @@ def run():
     #     filename="best-{epoch:02d}-{val_loss:.2f}"
     # )
 
-    trainer = L.pytorch.Trainer(logger=wandb_logger, max_epochs=5, val_check_interval=5, accelerator="auto", enable_checkpointing=False, callbacks=[Plotting()])
+    trainer = L.pytorch.Trainer(logger=wandb_logger, max_epochs=10, log_every_n_steps=5, val_check_interval=3, accelerator="auto", enable_checkpointing=False, callbacks=[Plotting(), LossLogging()])
+    # trainer.fit(model, train_dataloaders=loader)
     trainer.fit(model, train_dataloaders=dataloader.load_data_set_batched_by_image(
         data_set_to_load=dataloader.train_data_set,
     ))
+
     # artifact = wandb.Artifact('best_model', type='model')
     # artifact.add_file(checkpoint_callback.best_model_path)
     # wandb_logger.experiment.log_artifact(artifact)

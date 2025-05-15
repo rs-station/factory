@@ -60,7 +60,7 @@ class MLP(torch.nn.Module):
         return self.network(x)
 
 class MLPScale(torch.nn.Module):
-    def __init__(self, input_dimension, hidden_dimension=64, number_of_layers=2):
+    def __init__(self, input_dimension, hidden_dimension=64, number_of_layers=1):
         super().__init__()
         self.activation = torch.nn.ReLU()
         self.hidden_dimension = hidden_dimension
@@ -90,4 +90,7 @@ class MLPScale(torch.nn.Module):
         self.distribution = torch.nn.Sequential(*map_to_distribution_layers)
 
     def forward(self, x) -> torch.distributions.Normal:
+        h = self.network(x)
+        print("MLP output:", h.mean().item(), h.min().item(), h.max().item(),
+            "any nan?", torch.isnan(h).any().item())
         return self.distribution(self.network(x))

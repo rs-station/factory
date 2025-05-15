@@ -41,9 +41,9 @@ class DataLoaderSettings():
     validation_set_split: float = 0.2
     test_set_split: float = 0
     number_of_images_per_batch: int = 3
-    number_of_shoeboxes_per_batch: int = 4
-    number_of_batches: int = 10
-    number_of_workers: int = 3
+    number_of_shoeboxes_per_batch: int = 100
+    number_of_batches: int = 8
+    number_of_workers: int = 4
     pin_memory: bool = True
     prefetch_factor: int|None = 2
     shuffle_indices: bool = True
@@ -70,7 +70,7 @@ class CrystallographicDataLoader():
         metadata = torch.load(
             os.path.join(self.settings.data_directory, self.settings.data_file_names["metadata"]), weights_only=True
         )
-        print("Metadata shape:", metadata.shape)
+        print("Metadata shape:", metadata.shape) #(d, h,k, l ,x, y, z)
 
         counts = torch.load(
             os.path.join(self.settings.data_directory, self.settings.data_file_names["counts"]), weights_only=True
@@ -178,6 +178,9 @@ class CrystallographicDataLoader():
             self.image_id_to_indices = image_id_to_indices
             self.settings = settings
             self.batches = self._get_batches()
+
+        def __len__(self):
+            return len(self.batches)
             
 
         def _list_of_shoebox_indices_by_image(self, number_of_images_per_batch: int) -> list:
@@ -232,8 +235,9 @@ class CrystallographicDataLoader():
         def __iter__(self):
             if self.settings.shuffle_groups:
                 random.shuffle(self.batches)
-            for batch in self.batches:
-                yield batch
+            return iter(self.batches)
+            # for batch in self.batches:
+            #     yield batch
 
     def load_data_set_batched_by_image(self, 
                                        data_set_to_load: torch.utils.data.dataset.Subset | torch.utils.data.TensorDataset,
