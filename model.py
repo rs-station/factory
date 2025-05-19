@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from networks import *
 import distributions
 import loss_functionality
-from callbacks import LossLogging, Plotting, CorrelationPlotting
+from callbacks import LossLogging, Plotting, CorrelationPlotting, ScalePlotting
 import get_protein_data
 import reciprocalspaceship as rs
 from abismal_torch.prior import WilsonPrior
@@ -308,7 +308,15 @@ def run():
     #     filename="best-{epoch:02d}-{val_loss:.2f}"
     # )
 
-    trainer = L.pytorch.Trainer(logger=wandb_logger, max_epochs=100, log_every_n_steps=5, val_check_interval=3, accelerator="auto", enable_checkpointing=False, callbacks=[Plotting(), LossLogging(), CorrelationPlotting()])
+    trainer = L.pytorch.Trainer(
+        logger=wandb_logger, 
+        max_epochs=200, 
+        log_every_n_steps=5, 
+        val_check_interval=3, 
+        accelerator="auto", 
+        enable_checkpointing=False, 
+        callbacks=[Plotting(), LossLogging(), CorrelationPlotting(), ScalePlotting()]
+    )
     # trainer.fit(model, train_dataloaders=loader)
     trainer.fit(model, train_dataloaders=dataloader.load_data_set_batched_by_image(
         data_set_to_load=dataloader.train_data_set,

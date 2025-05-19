@@ -33,13 +33,13 @@ class NormalDistributionLayer(torch.nn.Module):
 
     def forward(self, hidden_representation):
         loc, scale = torch.unbind(hidden_representation, dim=-1)
-        scale = self.bijector(scale)
+        scale = self.bijector(scale) + 1e-3
         return torch.distributions.Normal(loc=loc, scale=scale)
     
 class MLP(torch.nn.Module):
     def __init__(self, hidden_dim=64, input_dim=7, number_of_layers=2):
         super().__init__()
-        activation = torch.nn.ReLU()
+        self.activation = torch.nn.ReLU()
         self.hidden_dimension = hidden_dim
         self.input_dim = input_dim
         self.add_bias = True
