@@ -41,7 +41,7 @@ class DataLoaderSettings():
     validation_set_split: float = 0.2
     test_set_split: float = 0
     number_of_images_per_batch: int = 3
-    number_of_shoeboxes_per_batch: int = 100
+    number_of_shoeboxes_per_batch: int = 90
     number_of_batches: int = 8
     number_of_workers: int = 4
     pin_memory: bool = True

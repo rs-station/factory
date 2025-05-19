@@ -20,7 +20,9 @@ import torch.nn.functional as F
 from networks import *
 import distributions
 import loss_functionality
+from callbacks import LossLogging, Plotting, CorrelationPlotting
 import get_protein_data
+import reciprocalspaceship as rs
 from abismal_torch.prior import WilsonPrior
 # from abismal_torch.symmetry.reciprocal_asu import ReciprocalASU, ReciprocalASUGraph
 from rasu import *
@@ -55,8 +57,8 @@ class Settings():
     # intensity_distribution_initial_location: float
     # intensity_distribution_initial_scale: float
     mvn_mean_prior_distribution = torch.distributions.normal.Normal(loc=torch.tensor(0.0), scale=torch.tensor(5.0))
-    mvn_cov_factor_prior_distribution = torch.distributions.normal.Normal(loc=torch.tensor(0.0), scale=torch.tensor(0.5))
-    mvn_cov_scale_prior_distribution = torch.distributions.half_normal.HalfNormal(scale=torch.tensor(0.3))
+    mvn_cov_factor_prior_distribution = torch.distributions.normal.Normal(loc=torch.tensor(0.0), scale=torch.tensor(0.1))
+    mvn_cov_scale_prior_distribution = torch.distributions.half_normal.HalfNormal(scale=torch.tensor(0.1))
     optimizer = torch.optim.AdamW
     dmodel = 64
     # batch_size = 4
@@ -78,9 +80,11 @@ class Settings():
     "counts": "raw_counts_subset.pt",
     "metadata": "shoebox_features_subset.pt",
     "masks": "masks_subset.pt",
-    "true_reference": "metadata_subset.pt",
+    "true_reference"
+    : "metadata_subset.pt",
     }
 
+    merged_mtz_file_path = "/n/hekstra_lab/people/aldama/subset/merged.mtz"
     protein_pdb_url = "https://files.rcsb.org/download/9B7C.cif"
     rac: ReciprocalASUCollection = dataclasses.field(init=False)
     def __post_init__(self):
@@ -192,7 +196,7 @@ class Model(L.LightningModule):
 
         if log_images:
             return (samples_scale * torch.square(samples_predicted_structure_factor) * samples_profile + samples_background,
-                    samples_profile)
+                    samples_profile, samples_surrogate_posterior, samples_predicted_structure_factor)
         else:
             return samples_scale * torch.square(samples_predicted_structure_factor) * samples_profile + samples_background  # [batch_size, mc_samples, pixels]
 
@@ -257,7 +261,7 @@ class Model(L.LightningModule):
             log_images=log_images
         )
         if log_images:
-            return (shoeboxes_batch, photon_rate, dials_reference_batch)
+            return (shoeboxes_batch, photon_rate, hkl_batch, dials_reference_batch)
 
 
         return (counts_batch, dead_pixel_mask_batch, hkl_batch, photon_rate, background_distribution, surrogate_posterior, 
@@ -283,97 +287,6 @@ class Model(L.LightningModule):
         data_set_to_load=self.dataloader.validation_data_set,
     )
 
-class LossLogging(Callback):
-    
-    def __init__(self):
-        super().__init__()
-        self.loss_per_epoch: float = 0
-        self.count_batches: int = 0
-    
-    # def on_train_epoch_end(self, trainer, pl_module):
-    #     pl_module.logger.experiment.log({"train_loss_per_epoch": self.loss_per_epoch/self.count_batches}, step=trainer.current_epoch)
-    #     self.loss_per_epoch = 0
-    #     self.count_batches = 0
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        avg = trainer.callback_metrics["train/loss_step_epoch"]
-        pl_module.log("train/loss_epoch", avg, on_step=False, on_epoch=True)
-
-
-    # def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
-    #     self.loss_per_epoch += pl_module.loss
-    #     self.count_batches += 1
-
-    
-class Plotting(Callback):
-
-    def __init__(self):
-        super().__init__()
-        self.fixed_batch = None
-
-    @staticmethod
-    def make_image(image):
-        fig, ax = plt.subplots()
-        _image_cpu = image.cpu().tolist()
-        ax.imshow(_image_cpu)  # convert CHW to HWC
-        ax.axis("off")
-        return fig
-        # return ToPILImage()(image.cpu())
-
-    def on_fit_start(self, trainer, pl_module):
-        device = next(pl_module.parameters()).device
-        _raw_batch = next(iter(pl_module.dataloader.load_data_for_logging_during_training()))
-        _raw_batch = [_batch_item.to(device) for _batch_item in _raw_batch]
-        self.fixed_batch = tuple(_raw_batch)
-
-    # def on_train_epoch_end(self, trainer, pl_module):
-    #     with torch.no_grad():
-    #         shoeboxes_batch, photon_rate_output, dials_reference = pl_module(self.fixed_batch, log_images=True)
-    #         dials_id = dials_reference[:, -1]
-    #         photon_rate, profile = photon_rate_output
-    #         batch_size = shoeboxes_batch.size(0)
-
-    #         raw_images     = [wandb.Image( self.make_image(shoeboxes_batch[b,:, -1].reshape(3,21,21)[1:2].squeeze()) )
-    #                         for b in range(batch_size)]
-    #         profile_images = [wandb.Image( self.make_image(profile[b,0,:].reshape(3,21,21)[1:2].squeeze()) )
-    #                         for b in range(batch_size)]
-    #         rate_images    = [wandb.Image( self.make_image(photon_rate[b,0,:].reshape(3,21,21)[1:2].squeeze()) )
-    #                         for b in range(batch_size)]
-
-    #         pl_module.logger.experiment.log({
-    #             f"raw_shoebox/epoch_{trainer.current_epoch}":     raw_images,
-    #             f"profile/epoch_{trainer.current_epoch}":       profile_images,
-    #             f"photon_rate/epoch_{trainer.current_epoch}":   rate_images,
-    #         }, step=trainer.global_step)
-
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        with torch.no_grad():
-            shoeboxes_batch, photon_rate_output, dials_reference = pl_module(self.fixed_batch, log_images=True)
-            dials_id = dials_reference[:,-1]
-            photon_rate, profile = photon_rate_output
-            images = []
-            
-            batch_size = shoeboxes_batch.size(0)
-            col_names = ["type"] + [f"ID {i}" for i in dials_id]
-            table     = wandb.Table(columns=col_names)
-
-            raw_images = [wandb.Image(self.make_image(shoeboxes_batch[batch, :, -1].reshape(3, 21, 21)[1:2,:].squeeze())) for batch in range(batch_size)]
-            profile_images = [wandb.Image(self.make_image(profile[batch,0,:].reshape(3,21,21)[1:2].squeeze())) for batch in range(batch_size)] # (batch_size, number of samples, pixels)
-            rate_images = [wandb.Image(self.make_image(photon_rate[batch,0,:].reshape(3,21,21)[1:2].squeeze())) for batch in range(batch_size)]
-
-            table.add_data("raw shoebox",  *raw_images)
-            table.add_data("profile",      *profile_images)
-            table.add_data("photon rate",  *rate_images)
-
-            # log the table
-            # pl_module.logger.experiment.log({"Image Grid": table},
-            #                                 step=trainer.global_step) 
-            # pl_module.logger.experiment.log({"Image Grid": table},
-            #                                 step=trainer.global_step)
-            pl_module.logger.experiment.log({"Image Grid": table}, step=trainer.global_step)
-            print("logged images")
-
 def run():
     settings = Settings()
     loss_settings = LossSettings()
@@ -386,19 +299,7 @@ def run():
     dataloader.load_data_()
     print("Data loaded successfully.")
 
-    # from torch.utils.data import DataLoader
-    # loader = DataLoader(
-    #         dataloader.train_data_set,
-    #         batch_size=10,
-    #     )
-    # dataloader=loader
-    # print("sanity check loader", len(loader), list(loader)[0][0].shape)
-
-
     model = Model(settings=settings, loss_settings=loss_settings, dataloader=dataloader)
-
-    # trainer = L.pytorch.Trainer(logger=wandb_logger,max_epochs=5, accelerator="auto")
-    # trainer.fit(model, train_dataloaders=loader)
    
     # checkpoint_callback = L.Callback.ModelCheckpoint(
     #     monitor="val_loss",
@@ -407,7 +308,7 @@ def run():
     #     filename="best-{epoch:02d}-{val_loss:.2f}"
     # )
 
-    trainer = L.pytorch.Trainer(logger=wandb_logger, max_epochs=10, log_every_n_steps=5, val_check_interval=3, accelerator="auto", enable_checkpointing=False, callbacks=[Plotting(), LossLogging()])
+    trainer = L.pytorch.Trainer(logger=wandb_logger, max_epochs=100, log_every_n_steps=5, val_check_interval=3, accelerator="auto", enable_checkpointing=False, callbacks=[Plotting(), LossLogging(), CorrelationPlotting()])
     # trainer.fit(model, train_dataloaders=loader)
     trainer.fit(model, train_dataloaders=dataloader.load_data_set_batched_by_image(
         data_set_to_load=dataloader.train_data_set,
