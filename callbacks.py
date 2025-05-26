@@ -1,4 +1,3 @@
-
 import torch
 import reciprocalspaceship as rs
 from lightning.pytorch.loggers import WandbLogger
@@ -40,13 +39,6 @@ class Plotting(Callback):
             photon_rate, profile, samples_surrogate_posterior, samples_predicted_structure_factor = photon_rate_output
             batch_size = shoeboxes_batch.size(0)
 
-            # Set font sizes
-            plt.rcParams.update({
-                'font.size': 35,
-                'axes.titlesize': 35,
-                'axes.labelsize': 35,
-            })
-
             fig, axes = plt.subplots(3, batch_size, figsize=(5*batch_size, 15))
             
             for b in range(batch_size):
@@ -80,11 +72,6 @@ class Plotting(Callback):
             })
             
             plt.close()
-            
-            fig, axes = plt.subplots()
-
-
-
 
 class CorrelationPlotting(Callback):
     
@@ -108,42 +95,58 @@ class CorrelationPlotting(Callback):
 
     def on_train_epoch_end(self, trainer, pl_module):
         shoeboxes_batch, (photon_rate, profile, samples_surrogate_posterior, samples_predicted_structure_factor), hkl_batch, _dials_reference = pl_module(self.fixed_batch, log_images=True)
+        
+        samples_surrogate_posterior = pl_module.surrogate_posterior.mean
         print("full samples", samples_surrogate_posterior.shape) 
         print("gathered ", samples_predicted_structure_factor.shape)
         rasu_ids = pl_module.surrogate_posterior.rac.rasu_ids[0]
         print("rasu id (all teh same as the first one?):",pl_module.surrogate_posterior.rac.rasu_ids)
-        ordered_samples = pl_module.surrogate_posterior.rac.gather(
+        # extract only the surrogate mean that matces the F available in the mtz
+
+        print("observed attribute", pl_module.surrogate_posterior.observed.sum())
+        mask_observed_indexed_as_dials_reference = pl_module.surrogate_posterior.rac.gather(
+            source=pl_module.surrogate_posterior.observed, rasu_id=rasu_ids, H=self.dials_reference.get_hkls()
+        )
+        print("mask_observed_indexed_as_dials_reference sum", mask_observed_indexed_as_dials_reference)
+
+        ordered_samples = pl_module.surrogate_posterior.rac.gather(  # gather wants source to be (rac_size, )
             source=samples_surrogate_posterior.T, rasu_id=rasu_ids, H=self.dials_reference.get_hkls()
         ) #(reflections_from_mtz, number_of_samples)
+
         print("get_hkl from dials", self.dials_reference.get_hkls().shape)
         print("dials ref", self.dials_reference["F"].shape)
         print("ordered samples", ordered_samples.shape)
 
-        num_hkl, num_samples = ordered_samples.shape
-        random_indices = torch.randint(0, num_samples, (num_hkl,))
-        random_sampled = ordered_samples[torch.arange(num_hkl), random_indices]
+        # num_hkl, num_samples = ordered_samples.shape
+        # random_indices = torch.randint(0, num_samples, (num_hkl,))
+        # random_sampled = ordered_samples[torch.arange(num_hkl), random_indices]
 
-        mean_sampled = ordered_samples.mean(dim=1)
+        # mean_sampled = ordered_samples.mean(dim=1)
 
-        # Plot correlation scatter plot
-        fig, axes = plt.subplots(1,3)
-        axes[0].scatter(self.dials_reference["F"].squeeze().to_numpy(), ordered_samples[:,0].squeeze().cpu().detach().numpy(), marker='x', s=10, alpha=0.5)
-        axes[0].set_xlabel('Modeled (True) Value')
-        axes[0].set_ylabel('Predicted Value [0]')
+        # mask out nonobserved reflections
+        print("sum of (reindexed) observed reflections", mask_observed_indexed_as_dials_reference.sum())
+        _masked_dials_reference = self.dials_reference[mask_observed_indexed_as_dials_reference.cpu().detach().numpy()]
+        print("masked dials reference", _masked_dials_reference["F"].shape)
+        _masked_ordered_samples = ordered_samples[mask_observed_indexed_as_dials_reference]
+        print("masked ordered samples", _masked_ordered_samples.shape)
 
-        axes[1].scatter(self.dials_reference["F"].squeeze().to_numpy(), random_sampled.squeeze().cpu().detach().numpy(),marker='x', s=10, alpha=0.5)
-        axes[1].set_xlabel('Modeled (True) Value')
-        axes[1].set_ylabel('Predicted Value [rand]')
-
-        axes[2].scatter(self.dials_reference["F"].squeeze().to_numpy(), mean_sampled.squeeze().cpu().detach().numpy(), marker='x', s=10, alpha=0.5)
-        axes[2].set_xlabel('Modeled (True) Value')
-        axes[2].set_ylabel('Predicted Value [mean]')
+        fig, axes = plt.subplots()
+        axes.scatter(_masked_dials_reference["F"].squeeze().to_numpy(), _masked_ordered_samples.squeeze().cpu().detach().numpy(), marker='x', s=10, alpha=0.5)
 
         pl_module.logger.experiment.log({
                 "Correlation": wandb.Image(plt),
                 "epoch": trainer.current_epoch
             })
         plt.close()
+
+        _hkl_plot = self.fixed_hkl_indices_for_surrogate_posterior
+        pl_module.logger.experiment.log({
+            f"structure_factor_evolution/{self.dials_reference.get_hkls()[_hkl_plot[0]]}": ordered_samples[0],
+            f"structure_factor_evolution/{self.dials_reference.get_hkls()[_hkl_plot[1]]}": ordered_samples[1],
+            f"structure_factor_evolution/{self.dials_reference.get_hkls()[_hkl_plot[2]]}": ordered_samples[2],
+            f"structure_factor_evolution/{self.dials_reference.get_hkls()[_hkl_plot[3]]}": ordered_samples[3],
+            f"structure_factor_evolution/{self.dials_reference.get_hkls()[_hkl_plot[4]]}": ordered_samples[4]
+        })
 
         # Plot histograms of posterior samples with true values
         fig, axes = plt.subplots(1, len(self.fixed_hkl_indices_for_surrogate_posterior), figsize=(5*len(self.fixed_hkl_indices_for_surrogate_posterior), 5))
@@ -152,10 +155,10 @@ class CorrelationPlotting(Callback):
         true_values = self.dials_reference["F"].to_numpy()
         
         for ax_index, hkl_index in enumerate(self.fixed_hkl_indices_for_surrogate_posterior):
-            reflection_samples = ordered_samples[hkl_index,:].cpu().detach().numpy()
+            reflection_samples = ordered_samples[hkl_index].cpu().detach().numpy()
             true_value = true_values[hkl_index]
             
-            axes[ax_index].hist(reflection_samples, bins=30, alpha=0.7, label='Posterior Samples')
+            axes[ax_index].axvline(reflection_samples, alpha=0.7, label='Posterior Samples')
             axes[ax_index].axvline(true_value, color='r', linestyle='--', label='True Value')
             axes[ax_index].set_title(f'HKL {self.dials_reference.get_hkls()[hkl_index]} \n {reflection_samples.shape} samples')
             axes[ax_index].set_xlabel('Amplitude')
@@ -185,49 +188,54 @@ class ScalePlotting(Callback):
     
     def on_fit_start(self, trainer, pl_module):
         device = next(pl_module.parameters()).device
-        _raw_batch = next(iter(pl_module.dataloader.load_data_for_logging_during_training(number_of_shoeboxes_to_log=10)))
+        _raw_batch = next(iter(pl_module.dataloader.load_data_for_logging_during_training(number_of_shoeboxes_to_log=100)))
         _raw_batch = [_batch_item.to(device) for _batch_item in _raw_batch]
         self.fixed_batch = tuple(_raw_batch)
 
     def on_train_epoch_end(self, trainer, pl_module):
         with torch.no_grad():
-            # Get the scale distribution
             shoeboxes_batch, metadata_batch, dead_pixel_mask_batch, counts_batch, hkl_batch, dials_reference_batch = self.fixed_batch
             
-            # Get representations
             standardized_counts = shoeboxes_batch[:,:,-1].reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21)
             shoebox_representation = pl_module.shoebox_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
             metadata_representation = pl_module.metadata_encoder(pl_module._cut_metadata(metadata_batch).float())
             joined_shoebox_representation = shoebox_representation + metadata_representation
             image_representation = torch.max(joined_shoebox_representation, dim=0, keepdim=True)[0]
 
-            # Get scale distribution
             scale_distribution = pl_module.compute_scale(image_representation=image_representation, metadata_representation=metadata_representation)
             
-            # Get distribution parameters
             loc = scale_distribution.loc.cpu().numpy()
             scale = scale_distribution.scale.cpu().numpy()
             
-            # Store history
+            print("Shape of loc:", loc.shape)
+            print("Shape of scale:", scale.shape)
+            print("Values of loc:", loc)
+            print("Values of scale:", scale)
+            
             self.scale_history['loc'].append(loc)
             self.scale_history['scale'].append(scale)
             
-            # Plot current distribution parameters
-            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            fig, axes = plt.subplots(1, 3, figsize=(12, 5))
             
-            # Plot location parameter
-            axes[0].hist(loc.flatten(), bins=30, alpha=0.7)
-            axes[0].set_title('Scale Distribution Location')
-            axes[0].set_xlabel('Value')
-            axes[0].set_ylabel('Count')
+            x = np.linspace(min(loc - 3*scale), max(loc + 3*scale), 1000)
             
-            # Plot scale parameter
-            axes[1].hist(scale.flatten(), bins=30, alpha=0.7)
-            axes[1].set_title('Scale Distribution Scale')
-            axes[1].set_xlabel('Value')
-            axes[1].set_ylabel('Count')
+            # Plot scale normal distribution
+            for i in range(len(loc)):
+                y = np.exp(-0.5 * ((x - loc[i])/scale[i])**2) / (scale[i] * np.sqrt(2*np.pi))
+                axes[0].plot(x, y, alpha=0.3)
+            axes[0].set_title('Scale Distribution Location', fontsize=12, pad=10)
+            axes[0].set_xlabel('Value', fontsize=10)
+            axes[0].set_ylabel('Probability Density', fontsize=10)
+            axes[0].tick_params(axis='both', which='major', labelsize=8)
             
-            plt.tight_layout()
+            # Plot scale parameters
+            axes[1].hist(loc, bins='auto', alpha=0.7)
+            axes[1].set_title("Histogram of Location Parameters", fontsize=10)
+
+            axes[2].hist(scale, bins='auto', alpha=0.7)
+            axes[2].set_title("Histogram of Scale Parameters", fontsize=10)
+            
+            plt.tight_layout(pad=2.0)
             
             pl_module.logger.experiment.log({
                 "Scale_Distribution_Parameters": wandb.Image(plt),
@@ -235,44 +243,40 @@ class ScalePlotting(Callback):
             })
             
             plt.close()
+
+            pl_module.logger.experiment.log({
+                "Scale_loc_evolution/predicted": loc,
+                "Scale_scale_evolution/predicted": scale,
+            })
             
-            # Plot evolution of parameters over time
-            if len(self.scale_history['loc']) > 1:
-                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                
-                # Plot location evolution
-                axes[0].plot([np.mean(loc) for loc in self.scale_history['loc']], label='Mean')
-                axes[0].fill_between(
-                    range(len(self.scale_history['loc'])),
-                    [np.min(loc) for loc in self.scale_history['loc']],
-                    [np.max(loc) for loc in self.scale_history['loc']],
-                    alpha=0.3,
-                    label='Range'
-                )
-                axes[0].set_title('Location Parameter Evolution')
-                axes[0].set_xlabel('Epoch')
-                axes[0].set_ylabel('Value')
-                axes[0].legend()
-                
-                # Plot scale evolution
-                axes[1].plot([np.mean(scale) for scale in self.scale_history['scale']], label='Mean')
-                axes[1].fill_between(
-                    range(len(self.scale_history['scale'])),
-                    [np.min(scale) for scale in self.scale_history['scale']],
-                    [np.max(scale) for scale in self.scale_history['scale']],
-                    alpha=0.3,
-                    label='Range'
-                )
-                axes[1].set_title('Scale Parameter Evolution')
-                axes[1].set_xlabel('Epoch')
-                axes[1].set_ylabel('Value')
-                axes[1].legend()
-                
-                plt.tight_layout()
-                
-                pl_module.logger.experiment.log({
-                    "Scale_Parameters_Evolution": wandb.Image(plt),
-                    "epoch": trainer.current_epoch
-                })
-                
-                plt.close()
+            background_samples = pl_module.background_distribution(shoebox_representation).mean
+            background_samples_variance = (pl_module.background_distribution(shoebox_representation).scale** 2 * (1 - 2 / torch.pi)).mean()
+            dials_background = dials_reference_batch[:,10]
+            print("dials reference shape", dials_reference_batch.shape, "background", dials_background.shape)
+            fig, axes = plt.subplots(1,2)
+            axes[0].scatter(range(len(background_samples)), background_samples.cpu().numpy())
+            axes[0].set_title(f"samples bkg, var mean={background_samples_variance.cpu().numpy()}")
+            axes[1].scatter(range(len(dials_background)), dials_background.cpu().numpy(),marker="x") 
+            # axes[1].set_title(f"dials bkg, var mean={dials_background[-1].cpu().numpy().mean()}")
+            # axes[1].scatter(range(len(dials_background[0])), dials_background[0].cpu().numpy(),marker="x") 
+            # axes[1].scatter(range(len(dials_background[1])), dials_background[1].cpu().numpy()) 
+            # axes[1].scatter(range(len(dials_background[2])), dials_background[2].cpu().numpy())       
+
+            plt.tight_layout()
+            
+            pl_module.logger.experiment.log({
+                "Background samples vs dials": wandb.Image(plt),
+                "epoch": trainer.current_epoch
+            })
+            
+            plt.close()
+
+    def on_train_end(self, trainer, pl_module):
+        unmerged_mtz = rs.read_mtz(pl_module.settings.unmerged_mtz_file_path)
+        scale_dials = unmerged_mtz["SCALEUSED"]
+        pl_module.logger.experiment.log({
+                "scale/mean_dials": scale_dials.mean(),
+                "scale/max_dials": scale_dials.max(),
+                "scale/min_dials": scale_dials.min()
+            })
+

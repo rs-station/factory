@@ -85,13 +85,19 @@ class CrystallographicDataLoader():
         )
         # shoeboxes,dead_pixel_mask, counts, metadata = self._clean_shoeboxes_(shoeboxes, dead_pixel_mask, counts, metadata)
         print("shoeboxes shape:", shoeboxes.shape)
+        # dials_reference = torch.load(
+        #     os.path.join(self.settings.data_directory, self.settings.data_file_names["true_reference"]), weights_only=True
+        # )
+
         dials_reference = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["true_reference"]), weights_only=True
+            "/n/hekstra_lab/people/aldama/subset/small_dataset/pass1/reference.pt", weights_only=True
         )
-        hkl = metadata[:,1:4]
+        print("dials refercne shape", dials_reference.shape)
+
+        hkl = metadata[:,1:4].to(torch.int)
         print("hkl shape", hkl.shape)
         self.full_data_set = TensorDataset(
-            shoeboxes, metadata, dead_pixel_mask, counts, hkl, dials_reference
+            shoeboxes, metadata, dead_pixel_mask, counts, hkl, dials_reference[:10000]
         )
 
     def append_image_id_to_metadata_(self) -> None:

@@ -32,8 +32,9 @@ from abismal_torch.merging import VariationalMergingModel
 from abismal_torch.scaling import ImageScaler
 
 from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 import wandb
+# from pytorch_lightning.callbacks import ModelCheckpoint
 
 from torchvision.transforms import ToPILImage
 from lightning.pytorch.utilities import grad_norm
@@ -84,7 +85,10 @@ class Settings():
     : "metadata_subset.pt",
     }
 
+    enable_checkpointing = True
+
     merged_mtz_file_path = "/n/hekstra_lab/people/aldama/subset/merged.mtz"
+    unmerged_mtz_file_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/unmerged.mtz"
     protein_pdb_url = "https://files.rcsb.org/download/9B7C.cif"
     rac: ReciprocalASUCollection = dataclasses.field(init=False)
     def __post_init__(self):
@@ -151,9 +155,31 @@ class Model(L.LightningModule):
         self.settings = dataclasses.replace(self.settings, **moved)
         return self
 
+    def compute_intensity_distribution(self):
+        initial_mean = self.settings.intensity_prior_distibution.distribution().mean() # self.settings.intensity_distribution_initial_location
+        print("intensity folded normal mean shape", initial_mean.shape)
+        initial_scale = 0.05 * initial_mean # self.settings.intensity_distribution_initial_scale
+        surrogate_posterior = FoldedNormalPosterior.from_unconstrained_loc_and_scale(
+            rac=self.settings.rac, loc=initial_mean, scale=initial_scale # epsilon=settings.epsilon
+        )
+
+        def check_grad_hook(grad):
+            if grad is not None:
+                print(f"Gradient stats: min={grad.min()}, max={grad.max()}, mean={grad.mean()}, any_nan={torch.isnan(grad).any()}, all_finite={torch.isfinite(grad).all()}")
+            return grad
+        surrogate_posterior.distribution.loc.register_hook(check_grad_hook)
+
+        return surrogate_posterior
+    
     def compute_scale(self, image_representation, metadata_representation) -> torch.distributions.Normal:
-        joined_representation = self._add_representation_(image_representation, metadata_representation) # (batch_size, dmodel)
-        return self.scale_model(joined_representation) # a  torch.distributions.Normal object
+        joined_representation = image_representation #self._add_representation_(image_representation, metadata_representation) # (batch_size, dmodel)
+        scale = self.scale_model(joined_representation)
+        self.logger.experiment.log({
+            "Scale/ MLP mean": scale.network.mean().item(),
+            "Scale/ MLP min": scale.network.min().item(),
+            "Scale/ MLP max": scale.network.max().item()
+        })
+        return scale.distribution
     
     def _add_representation_(self, representation1, representation2):
         return representation1 + representation2
@@ -190,7 +216,7 @@ class Model(L.LightningModule):
 
         rasu_ids = surrogate_posterior.rac.rasu_ids[0]
         samples_predicted_structure_factor = self.surrogate_posterior.rac.gather(
-            source=samples_surrogate_posterior.T, rasu_id=rasu_ids, H=ordered_miller_indices.to(torch.int)
+            source=samples_surrogate_posterior.T, rasu_id=rasu_ids, H=ordered_miller_indices
         ).unsqueeze(-1)
         print("gathered structure factor samples", samples_predicted_structure_factor.shape)
 
@@ -198,31 +224,29 @@ class Model(L.LightningModule):
             return (samples_scale * torch.square(samples_predicted_structure_factor) * samples_profile + samples_background,
                     samples_profile, samples_surrogate_posterior, samples_predicted_structure_factor)
         else:
-            return samples_scale * torch.square(samples_predicted_structure_factor) * samples_profile + samples_background  # [batch_size, mc_samples, pixels]
-
-        # return samples_scale * samples_profile + samples_background  # [batch_size, mc_samples, pixels]
-
-    def compute_intensity_distribution(self):
-        initial_mean = self.settings.intensity_prior_distibution.distribution().mean() # self.settings.intensity_distribution_initial_location
-        print("intensity folded normal mean shape", initial_mean.shape)
-        initial_scale = 0.05 * initial_mean # self.settings.intensity_distribution_initial_scale
-        surrogate_posterior = FoldedNormalPosterior.from_unconstrained_loc_and_scale(
-            rac=self.settings.rac, loc=initial_mean, scale=initial_scale # epsilon=settings.epsilon
-        )
-
-        #####
-        def check_grad_hook(grad):
-            if grad is not None:
-                print(f"Gradient stats: min={grad.min()}, max={grad.max()}, mean={grad.mean()}, any_nan={torch.isnan(grad).any()}, all_finite={torch.isfinite(grad).all()}")
-            return grad
-        surrogate_posterior.distribution.loc.register_hook(check_grad_hook)
-        ###
-
-        return surrogate_posterior
+            photon_rate = samples_scale * torch.square(samples_predicted_structure_factor) * samples_profile + samples_background  # [batch_size, mc_samples, pixels]
+            self.logger.experiment.log({
+                "scale/mean_from_samples": samples_scale.mean().item(),
+                "scale/max_from_samples": samples_scale.max().item(),
+                "scale/min_from_samples": samples_scale.min().item(),
+                "structure_factor/mean_from_samples": samples_predicted_structure_factor.mean().item(),
+                "structure_factor/max_from_samples": samples_predicted_structure_factor.max().item(),
+                "structure_factor/min_from_samples": samples_predicted_structure_factor.min().item(),
+                "profile/mean_from_samples": samples_profile.mean().item(),
+                "profile/max_from_samples": samples_profile.max().item(),
+                "profile/min_from_samples": samples_profile.mean().min(),
+                "background/mean_from_samples": samples_background.mean().item(),
+                "background/max_from_samples": samples_background.max().item(),
+                "background/min_from_samples": samples_background.min().item(),
+                "photon_rate/mean_from_samples": photon_rate.mean().item(),
+                "photon_rate/max_from_samples": photon_rate.max().item(),
+                "photon_rate/min_from_samples": photon_rate.min().item(),
+            })
+            return photon_rate
     
     def _cut_metadata(self, metadata) -> torch.Tensor:
         device = next(self.parameters()).device
-        return torch.index_select(metadata, dim=1, index=torch.tensor([4,5], device=device))
+        return torch.index_select(metadata, dim=1, index=torch.tensor([4,5], device=device)) # 4,5 corresponds to 
 
     def forward(self, batch, log_images=False):
         shoeboxes_batch, metadata_batch, dead_pixel_mask_batch, counts_batch, hkl_batch, dials_reference_batch = batch
@@ -250,13 +274,14 @@ class Model(L.LightningModule):
         scale_distribution = self.compute_scale(image_representation=image_representation, metadata_representation=metadata_representation) #  torch.distributions.Normal instance
         shoebox_profile = self.compute_shoebox_profile(shoebox_representation=shoebox_representation, image_representation=image_representation)
         background_distribution = self.compute_background_distribution(shoebox_representation=shoebox_representation)
-        surrogate_posterior = self.surrogate_posterior 
+        print("hkl batch", hkl_batch)
+        self.surrogate_posterior.update_observed(rasu_id=self.surrogate_posterior.rac.rasu_ids[0], H=hkl_batch)
 
         photon_rate = self.compute_photon_rate(
             scale_distribution=scale_distribution,
             background_distribution=background_distribution,
             profile=shoebox_profile,
-            surrogate_posterior=surrogate_posterior,
+            surrogate_posterior=self.surrogate_posterior,
             ordered_miller_indices=hkl_batch,
             log_images=log_images
         )
@@ -264,12 +289,21 @@ class Model(L.LightningModule):
             return (shoeboxes_batch, photon_rate, hkl_batch, dials_reference_batch)
 
 
-        return (counts_batch, dead_pixel_mask_batch, hkl_batch, photon_rate, background_distribution, surrogate_posterior, 
+        return (counts_batch, dead_pixel_mask_batch, hkl_batch, photon_rate, background_distribution, self.surrogate_posterior, 
                 self.lrmvn_distribution_for_shoebox_profile.mvn_mean_distribution, self.lrmvn_distribution_for_shoebox_profile.mvn_cov_factor_distribution, self.lrmvn_distribution_for_shoebox_profile.mvn_cov_scale_distribution)
     
     def training_step(self, batch):
         output = self(batch=batch)
-        self.loss = self.loss_function(*output)
+        loss_output = self.loss_function(*output)
+
+        self.logger.experiment.log({
+                "loss/kl_structure_factors": loss_output.kl_structure_factors.item(),
+                "loss/kl_background": loss_output.kl_background.item(),
+                "loss/kl_profile": loss_output.kl_profile.item(),
+                "loss/log_likelihood": loss_output.log_likelihood.item(),
+            })
+
+        self.loss = loss_output.loss
         # self.logger.experiment.log({"train_loss": self.loss})
         self.log("train/loss_step", self.loss, on_step=True, on_epoch=True)
         norms = grad_norm(self, norm_type=2)
@@ -279,6 +313,19 @@ class Model(L.LightningModule):
         print("Loss: ", self.loss)
         return self.loss
     
+    def validation_step(self, batch, batch_idx):
+        output = self(batch=batch)
+        loss_output = self.loss_function(*output)
+
+        self.log("validation_loss/kl_structure_factors", loss_output.kl_structure_factors.item(), on_step=False, on_epoch=True)
+        self.log("validation_loss/kl_background", loss_output.kl_background.item(), on_step=False, on_epoch=True)
+        self.log("validation_loss/kl_profile", loss_output.kl_profile.item(), on_step=False, on_epoch=True)
+        self.log("validation_loss/log_likelihood", loss_output.log_likelihood.item(), on_step=False, on_epoch=True)
+        # print("Validation Loss: ", loss_output.loss.item())
+        self.log("validation_loss/loss", loss_output.loss.item(), on_step=False, on_epoch=True)
+
+        return loss_output.loss
+
     def configure_optimizers(self):
         return self.optimizer
     
@@ -300,31 +347,33 @@ def run():
     print("Data loaded successfully.")
 
     model = Model(settings=settings, loss_settings=loss_settings, dataloader=dataloader)
-   
-    # checkpoint_callback = L.Callback.ModelCheckpoint(
-    #     monitor="val_loss",
-    #     save_top_k=1,
-    #     mode="min",
-    #     filename="best-{epoch:02d}-{val_loss:.2f}"
-    # )
+    if settings.enable_checkpointing:
+        checkpoint_callback = ModelCheckpoint(
+            monitor="validation_loss/loss",
+            save_top_k=1,
+            mode="min",
+            filename="best-{epoch:02d}-{validation_loss/loss:.2f}"
+        )
 
     trainer = L.pytorch.Trainer(
         logger=wandb_logger, 
-        max_epochs=200, 
+        max_epochs=300, 
         log_every_n_steps=5, 
         val_check_interval=3, 
         accelerator="auto", 
-        enable_checkpointing=False, 
-        callbacks=[Plotting(), LossLogging(), CorrelationPlotting(), ScalePlotting()]
+        enable_checkpointing=settings.enable_checkpointing, 
+        callbacks=[Plotting(), LossLogging(), CorrelationPlotting(), ScalePlotting(), checkpoint_callback]
     )
-    # trainer.fit(model, train_dataloaders=loader)
     trainer.fit(model, train_dataloaders=dataloader.load_data_set_batched_by_image(
         data_set_to_load=dataloader.train_data_set,
     ))
+    if settings.enable_checkpointing and checkpoint_callback.best_model_path:
+        artifact = wandb.Artifact('best_model', type='model')
+        artifact.add_file(checkpoint_callback.best_model_path)
+        wandb_logger.experiment.log_artifact(artifact)
+    else:
+        print("No checkpoint to log — possibly because no validation occurred or no model was saved.")
 
-    # artifact = wandb.Artifact('best_model', type='model')
-    # artifact.add_file(checkpoint_callback.best_model_path)
-    # wandb_logger.experiment.log_artifact(artifact)
 
 
 def main():
