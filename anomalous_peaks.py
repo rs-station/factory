@@ -1,6 +1,7 @@
 import torch
 import pandas as pd
 import numpy as np
+import subprocess
 
 import wandb
 import pytorch_lightning as L
@@ -62,8 +63,8 @@ ds = rs.DataSet(df)
 
 pdb_data =  get_protein_data.get_protein_data(settings.protein_pdb_url)
 ds.set_index(["H", "K", "L"], inplace=True)
-ds.set_spacegroup(pdb_data["spacegroup"])  # Replace with your actual space group
-ds.set_unitcell(pdb_data["unit_cell"])  # Replace with your actual unit cell
+ds.set_spacegroup(pdb_data["spacegroup"])  
+ds.set_unitcell(pdb_data["unit_cell"])  
 
 ds["F"].set_observation_type("intensity")
 ds["F"].set_mtztype("F")
@@ -72,5 +73,12 @@ ds.rename(columns={"F": "F_obs", "SIGF": "SIGF_obs"}, inplace=True)
 ds.write_mtz("phenix_ready.mtz")
 # ds.write_mtz("model_output.mtz")
 
-phenix.autosol data=structure_factors.mtz seq=your_sequence.seq
-phenix.phaser data=structure_factors.mtz seq=your_sequence.seq
+import subprocess
+
+phenix_command = [
+    "phenix.autosol", 
+    "phenix_ready.mtz",
+    f"sequence_file={settings.lysozime_sequence_file_path}",  
+]
+
+subprocess.run(phenix_command, check=True)
