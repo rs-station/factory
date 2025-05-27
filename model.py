@@ -39,7 +39,10 @@ import wandb
 from torchvision.transforms import ToPILImage
 from lightning.pytorch.utilities import grad_norm
 import matplotlib.pyplot as plt
+
 wandb_logger = WandbLogger(project="full-model", name="testing-1")
+
+import wandb
 
 # import integrator
 # from integrator import data_loaders
@@ -86,6 +89,7 @@ class Settings():
     }
 
     enable_checkpointing = True
+    lysozime_sequence_file_path = "lysozyme.seq"
 
     merged_mtz_file_path = "/n/hekstra_lab/people/aldama/subset/merged.mtz"
     unmerged_mtz_file_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/unmerged.mtz"
@@ -174,11 +178,11 @@ class Model(L.LightningModule):
     def compute_scale(self, image_representation, metadata_representation) -> torch.distributions.Normal:
         joined_representation = image_representation #self._add_representation_(image_representation, metadata_representation) # (batch_size, dmodel)
         scale = self.scale_model(joined_representation)
-        self.logger.experiment.log({
-            "Scale/ MLP mean": scale.network.mean().item(),
-            "Scale/ MLP min": scale.network.min().item(),
-            "Scale/ MLP max": scale.network.max().item()
-        })
+        # self.logger.experiment.log({
+        #     "Scale/ MLP mean": scale.network.mean().item(),
+        #     "Scale/ MLP min": scale.network.min().item(),
+        #     "Scale/ MLP max": scale.network.max().item()
+        # })
         return scale.distribution
     
     def _add_representation_(self, representation1, representation2):
@@ -225,23 +229,23 @@ class Model(L.LightningModule):
                     samples_profile, samples_surrogate_posterior, samples_predicted_structure_factor)
         else:
             photon_rate = samples_scale * torch.square(samples_predicted_structure_factor) * samples_profile + samples_background  # [batch_size, mc_samples, pixels]
-            self.logger.experiment.log({
-                "scale/mean_from_samples": samples_scale.mean().item(),
-                "scale/max_from_samples": samples_scale.max().item(),
-                "scale/min_from_samples": samples_scale.min().item(),
-                "structure_factor/mean_from_samples": samples_predicted_structure_factor.mean().item(),
-                "structure_factor/max_from_samples": samples_predicted_structure_factor.max().item(),
-                "structure_factor/min_from_samples": samples_predicted_structure_factor.min().item(),
-                "profile/mean_from_samples": samples_profile.mean().item(),
-                "profile/max_from_samples": samples_profile.max().item(),
-                "profile/min_from_samples": samples_profile.mean().min(),
-                "background/mean_from_samples": samples_background.mean().item(),
-                "background/max_from_samples": samples_background.max().item(),
-                "background/min_from_samples": samples_background.min().item(),
-                "photon_rate/mean_from_samples": photon_rate.mean().item(),
-                "photon_rate/max_from_samples": photon_rate.max().item(),
-                "photon_rate/min_from_samples": photon_rate.min().item(),
-            })
+            # self.logger.experiment.log({
+            #     "scale/mean_from_samples": samples_scale.mean().item(),
+            #     "scale/max_from_samples": samples_scale.max().item(),
+            #     "scale/min_from_samples": samples_scale.min().item(),
+            #     "structure_factor/mean_from_samples": samples_predicted_structure_factor.mean().item(),
+            #     "structure_factor/max_from_samples": samples_predicted_structure_factor.max().item(),
+            #     "structure_factor/min_from_samples": samples_predicted_structure_factor.min().item(),
+            #     "profile/mean_from_samples": samples_profile.mean().item(),
+            #     "profile/max_from_samples": samples_profile.max().item(),
+            #     "profile/min_from_samples": samples_profile.mean().min(),
+            #     "background/mean_from_samples": samples_background.mean().item(),
+            #     "background/max_from_samples": samples_background.max().item(),
+            #     "background/min_from_samples": samples_background.min().item(),
+            #     "photon_rate/mean_from_samples": photon_rate.mean().item(),
+            #     "photon_rate/max_from_samples": photon_rate.max().item(),
+            #     "photon_rate/min_from_samples": photon_rate.min().item(),
+            # })
             return photon_rate
     
     def _cut_metadata(self, metadata) -> torch.Tensor:
@@ -352,17 +356,19 @@ def run():
             monitor="validation_loss/loss",
             save_top_k=1,
             mode="min",
-            filename="best-{epoch:02d}-{validation_loss/loss:.2f}"
+            filename="best-{epoch:02d}-{validation_loss/loss:.2f}",
+            save_weights_only=True
         )
 
     trainer = L.pytorch.Trainer(
         logger=wandb_logger, 
-        max_epochs=300, 
+        max_epochs=10, 
         log_every_n_steps=5, 
         val_check_interval=3, 
         accelerator="auto", 
         enable_checkpointing=settings.enable_checkpointing, 
-        callbacks=[Plotting(), LossLogging(), CorrelationPlotting(), ScalePlotting(), checkpoint_callback]
+        default_root_dir="/tmp",
+        callbacks=[Plotting(), LossLogging(), CorrelationPlotting(), checkpoint_callback] # ScalePlotting()
     )
     trainer.fit(model, train_dataloaders=dataloader.load_data_set_batched_by_image(
         data_set_to_load=dataloader.train_data_set,
@@ -371,6 +377,8 @@ def run():
         artifact = wandb.Artifact('best_model', type='model')
         artifact.add_file(checkpoint_callback.best_model_path)
         wandb_logger.experiment.log_artifact(artifact)
+        print("Best model saved at:", checkpoint_callback.best_model_path)
+
     else:
         print("No checkpoint to log — possibly because no validation occurred or no model was saved.")
 
