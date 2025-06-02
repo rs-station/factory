@@ -1,8 +1,9 @@
-from data_loader import *
 import argparse
 import json
 
 import CNN_3d
+from data_loader import *
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Pass DataLoader settings")
@@ -19,11 +20,12 @@ def parse_args():
     )
     return parser.parse_args()
 
+
 def main():
     print("main function")
     # args = parse_args()
     # if args.data_file_names is not None:
-    #     settings = DataLoaderSettings(data_directory=args.data_directory, 
+    #     settings = DataLoaderSettings(data_directory=args.data_directory,
     #                                 data_file_names=args.data_file_names,
     #                                 test_set_split=0.01
     #                                 )
@@ -39,18 +41,19 @@ def main():
 
     data_directory = "/n/hekstra_lab/people/aldama/subset"
     data_file_names = {
-    "shoeboxes": "standardized_shoeboxes_subset.pt",
-    "counts": "raw_counts_subset.pt",
-    "metadata": "shoebox_features_subset.pt",
-    "masks": "masks_subset.pt",
-    "true_reference": "metadata_subset.pt",
+        "shoeboxes": "standardized_shoeboxes_subset.pt",
+        "counts": "raw_counts_subset.pt",
+        "metadata": "shoebox_features_subset.pt",
+        "masks": "masks_subset.pt",
+        "true_reference": "metadata_subset.pt",
     }
 
     print("load settings")
-    settings = DataLoaderSettings(data_directory=data_directory,
-                                data_file_names=data_file_names,
-                                test_set_split=0.5
-                                )
+    settings = DataLoaderSettings(
+        data_directory=data_directory,
+        data_file_names=data_file_names,
+        test_set_split=0.5,
+    )
     print("load settings done")
     test_data = test(settings=settings)
     batch = next(iter(test_data))
@@ -66,4 +69,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
