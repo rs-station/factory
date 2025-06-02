@@ -1,0 +1,10 @@
+{% extends "!layout.html" %}
+
+{% block menu %}
+    {{ super() }}
+    <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+    <ul>
+        <li class="toctree-l1"><a class="reference internal" href="{{ pathto('index') }}">Home</a></li>
+        <li class="toctree-l1"><a class="reference internal" href="{{ pathto('api/index') }}">API Reference</a></li>
+    </ul>
+{% endblock %} 
