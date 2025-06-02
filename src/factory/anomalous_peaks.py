@@ -1,24 +1,23 @@
-import torch
-import pandas as pd
-import numpy as np
-import subprocess
 import os
-import matplotlib.pyplot as plt
+import subprocess
 
-import wandb
-import pytorch_lightning as L
-
-import reciprocalspaceship as rs
-import rs_distributions as rsd
-
-from model import *
 import data_loader
 import get_protein_data
-
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pytorch_lightning as L
+import reciprocalspaceship as rs
+import rs_distributions as rsd
+import torch
+import wandb
+from model import *
 
 wandb.init(project="anomalous peaks")
 
-artifact = wandb.use_artifact("flaviagiehr-harvard-university/full-model/best_model:latest", type="model")
+artifact = wandb.use_artifact(
+    "flaviagiehr-harvard-university/full-model/best_model:latest", type="model"
+)
 artifact_dir = artifact.download()
 
 ckpt_files = [f for f in os.listdir(artifact_dir) if f.endswith(".ckpt")]
@@ -35,10 +34,10 @@ loss_settings = LossSettings()
 # dataloader = _dataloader.load_data_set_batched_by_image(data_set_to_load=_dataloader.train_data_set)
 
 
-
-model = Model.load_from_checkpoint(checkpoint_path, settings=settings, loss_settings=loss_settings)#, dataloader=dataloader)
+model = Model.load_from_checkpoint(
+    checkpoint_path, settings=settings, loss_settings=loss_settings
+)  # , dataloader=dataloader)
 model.eval()
-
 
 
 # hkl_batch = []
@@ -53,7 +52,6 @@ model.eval()
 # #         print("hkl batch shape:", _hkl_batch.shape)
 # #         hkl_batch.append(_hkl_batch.to(torch.int).to(device))
 #         # _surrogate_posteriors_for_all_batches.append(output[5])
-
 
 
 # surrogate_posterior_all_reflections = model.surrogate_posterior.mean
@@ -80,8 +78,8 @@ model.eval()
 # })
 # ds = rs.DataSet(df)
 # ds.set_index(["H", "K", "L"], inplace=True)
-# ds.spacegroup = settings.pdb_data["spacegroup"]  
-# ds.cell = settings.pdb_data["unit_cell"]  
+# ds.spacegroup = settings.pdb_data["spacegroup"]
+# ds.cell = settings.pdb_data["unit_cell"]
 
 # ds["F"] = rs.DataSeries(ds["F"], dtype="F")
 
@@ -94,7 +92,9 @@ repo_dir = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files
 mtz_output_path = os.path.join(repo_dir, "phenix_ready.mtz")
 
 # Get the dataset and verify its contents
-surrogate_posterior_dataset = list(model.surrogate_posterior.to_dataset(only_observed=True))[0]
+surrogate_posterior_dataset = list(
+    model.surrogate_posterior.to_dataset(only_observed=True)
+)[0]
 
 # Print dataset information
 print("\nDataset Information:")
@@ -105,7 +105,7 @@ print(f"Cell parameters: {surrogate_posterior_dataset.cell}")
 
 # Try to get wavelength from the dataset
 wavelength = None
-if hasattr(surrogate_posterior_dataset, 'wavelength'):
+if hasattr(surrogate_posterior_dataset, "wavelength"):
     wavelength = surrogate_posterior_dataset.wavelength
     print(f"\nWavelength from dataset: {wavelength}Å")
 else:
@@ -115,17 +115,19 @@ else:
 # Print some statistics for available columns
 print("\nStructure Factor Statistics:")
 # Check if we have anomalous data
-is_anomalous = any(col in surrogate_posterior_dataset.columns for col in ['F(+)', 'F(-)'])
+is_anomalous = any(
+    col in surrogate_posterior_dataset.columns for col in ["F(+)", "F(-)"]
+)
 
 if is_anomalous:
     print("Anomalous data detected:")
-    for col in ['F(+)', 'F(-)', 'SIGF(+)', 'SIGF(-)']:
+    for col in ["F(+)", "F(-)", "SIGF(+)", "SIGF(-)"]:
         if col in surrogate_posterior_dataset.columns:
             print(f"{col} mean: {surrogate_posterior_dataset[col].mean():.2f}")
             print(f"{col} std: {surrogate_posterior_dataset[col].std():.2f}")
 else:
     print("Non-anomalous data:")
-    for col in ['F', 'SIGF']:
+    for col in ["F", "SIGF"]:
         if col in surrogate_posterior_dataset.columns:
             print(f"{col} mean: {surrogate_posterior_dataset[col].mean():.2f}")
             print(f"{col} std: {surrogate_posterior_dataset[col].std():.2f}")
@@ -139,14 +141,14 @@ surrogate_posterior_dataset.write_mtz(mtz_output_path)
 if os.path.exists(mtz_output_path):
     print(f"Successfully wrote MTZ file to: {mtz_output_path}")
     print(f"File size: {os.path.getsize(mtz_output_path) / 1024:.2f} KB")
-    
+
     # Read and inspect the MTZ file
     print("\nInspecting MTZ file contents:")
     mtz_dataset = rs.read_mtz(mtz_output_path)
     print(f"Columns in MTZ file: {mtz_dataset.columns.tolist()}")
     print(f"Spacegroup: {mtz_dataset.spacegroup}")
     print(f"Cell parameters: {mtz_dataset.cell}")
-    if hasattr(mtz_dataset, 'wavelength'):
+    if hasattr(mtz_dataset, "wavelength"):
         print(f"Wavelength: {mtz_dataset.wavelength}")
 else:
     print("Error: Failed to write MTZ file")
@@ -203,16 +205,20 @@ cmd = f"source {phenix_env} && cd {repo_dir} && phenix.autosol {mtz_output_path}
 if not os.path.exists(mtz_output_path):
     raise FileNotFoundError(f"MTZ file not found at {mtz_output_path}")
 if not os.path.exists(settings.lysozyme_sequence_file_path):
-    raise FileNotFoundError(f"Sequence file not found at {settings.lysozyme_sequence_file_path}")
+    raise FileNotFoundError(
+        f"Sequence file not found at {settings.lysozyme_sequence_file_path}"
+    )
 
 # Check if files are readable
 try:
-    with open(mtz_output_path, 'rb') as f:
+    with open(mtz_output_path, "rb") as f:
         pass
-    with open(settings.lysozyme_sequence_file_path, 'r') as f:
+    with open(settings.lysozyme_sequence_file_path, "r") as f:
         pass
 except PermissionError:
-    raise PermissionError(f"Cannot read one or more input files. Please check file permissions.")
+    raise PermissionError(
+        f"Cannot read one or more input files. Please check file permissions."
+    )
 
 print("\nRunning phenix.autosol with command:")
 print(cmd)
@@ -220,11 +226,11 @@ print(cmd)
 try:
     # Run the command and capture both stdout and stderr
     result = subprocess.run(
-        ["bash", "-c", cmd], 
-        check=True, 
-        capture_output=True, 
+        ["bash", "-c", cmd],
+        check=True,
+        capture_output=True,
         text=True,
-        env=os.environ.copy()  # Pass current environment
+        env=os.environ.copy(),  # Pass current environment
     )
     print("\nPhenix ran successfully.")
     print("Output:", result.stdout)
@@ -266,10 +272,7 @@ print("check columns", ds.columns)
 # "F(+)", "F(-)", "PHIF(+)", "PHIF(-)"
 
 peaks = rsd.peak_finder(
-    ds,
-    map_column="F(+) - F(-)",  # anomalous difference column
-    dmin=2.5,
-    sigma=3.5
+    ds, map_column="F(+) - F(-)", dmin=2.5, sigma=3.5  # anomalous difference column
 )
 
 # Save peaks
