@@ -8,49 +8,40 @@ python data_loader.py --data_directory <path_to_data_directory>.
 import torch
 import os
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Subset, Dataset
 from torch.utils.data import Sampler
 import itertools
 import random
 import dataclasses
 import argparse
+import settings
 
-@ dataclasses.dataclass
-class DataLoaderSettings():
-    data_directory: str 
-    data_file_names: dict = dataclasses.field(default_factory=lambda: {
-        "shoeboxes": "shoebox_subset.pt",
-        "counts": "raw_counts_subset.pt",
-        "metadata": "metadata_subset.pt",
-        "masks": "mask_subset.pt",
-        "true_reference": "true_reference_subset.pt",
-    })
-    metadata_indices: dict = dataclasses.field(default_factory=lambda: {
-        "d": 0,
-        "h": 1,
-        "k": 2,
-        "l": 3,
-        "x": 4,
-        "y": 5,
-        "z": 6,
-    })
-    metadata_keys_to_keep: list = dataclasses.field(default_factory=lambda: [
-        "x", "y"
-    ])
 
-    validation_set_split: float = 0.2
-    test_set_split: float = 0
-    number_of_images_per_batch: int = 3
-    number_of_shoeboxes_per_batch: int = 90
-    number_of_batches: int = 8
-    number_of_workers: int = 4
-    pin_memory: bool = True
-    prefetch_factor: int|None = 2
-    shuffle_indices: bool = True
-    shuffle_groups: bool = True
-    optimize_shoeboxes_per_batch: bool = True
-    append_image_id_to_metadata: bool = False
-    verbose: bool = True
+
+class ShoeboxTensorDataset(Dataset):
+    def __init__(self, shoeboxes, metadata, dead_pixel_mask, counts, hkl, mean, var):
+        self.shoeboxes = shoeboxes
+        self.metadata = metadata
+        self.dead_pixel_mask = dead_pixel_mask
+        self.counts = counts
+        self.hkl = hkl
+        self.mean = mean
+        self.var = var
+
+    def __len__(self):
+        return self.shoeboxes.shape[0]
+
+    def __getitem__(self, idx):
+        # Normalize on the fly
+        counts = self.counts[idx]
+        normed_shoebox = (counts - self.mean) / torch.sqrt(self.var)
+        return (
+            normed_shoebox,
+            self.metadata[idx],
+            self.dead_pixel_mask[idx],
+            self.counts[idx],
+            self.hkl[idx],
+        )
 
 
 class CrystallographicDataLoader():
@@ -58,31 +49,45 @@ class CrystallographicDataLoader():
     train_data_set: torch.utils.data.dataset.Subset
     validation_data_set: torch.utils.data.dataset.Subset
     test_data_set: torch.utils.data.dataset.Subset
-    settings: DataLoaderSettings
+    data_loader_settings: settings.DataLoaderSettings
 
     def __init__(
             self, 
-            settings: DataLoaderSettings
+            data_loader_settings: settings.DataLoaderSettings
         ):
-        self.settings = settings
+        self.data_loader_settings = data_loader_settings
+        self.use_standard_sampler = False
 
     def _get_raw_shoebox_data_(self):
-        metadata = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["metadata"]), weights_only=True
-        )
-        print("Metadata shape:", metadata.shape) #(d, h,k, l ,x, y, z)
+        
+        # counts = torch.load(
+        #     os.path.join(self.settings.data_directory, self.settings.data_file_names["counts"]), weights_only=True
+        # )
+        # print("counts shape:", counts.shape)
 
-        counts = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["counts"]), weights_only=True
-        )
-        print("counts shape:", counts.shape)
         dead_pixel_mask = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["masks"]), weights_only=True
+            os.path.join(self.data_loader_settings.data_directory, self.data_loader_settings.data_file_names["masks"]), weights_only=True
         )
         print("dead_pixel_mask shape:", dead_pixel_mask.shape)
         shoeboxes = torch.load(
-            os.path.join(self.settings.data_directory, self.settings.data_file_names["shoeboxes"]), weights_only=True
+            os.path.join(self.data_loader_settings.data_directory, self.data_loader_settings.data_file_names["counts"]), weights_only=True
         )
+        # shoeboxes = shoeboxes[:,:,-1]
+        # if len(shoeboxes[0]) != 7:
+        #     self.use_standard_sampler = True
+        
+        counts = shoeboxes.clone()
+        print("standard sampler:", self.use_standard_sampler)
+
+        stats = torch.load(os.path.join(self.data_loader_settings.data_directory,"stats.pt"), weights_only=True)
+        mean = stats[0]
+        var = stats[1]
+
+        print("mean", mean)
+        print("var", var)
+
+        shoeboxes = (counts - mean) / torch.sqrt(var)
+
         # shoeboxes,dead_pixel_mask, counts, metadata = self._clean_shoeboxes_(shoeboxes, dead_pixel_mask, counts, metadata)
         print("shoeboxes shape:", shoeboxes.shape)
         # dials_reference = torch.load(
@@ -94,15 +99,41 @@ class CrystallographicDataLoader():
         # )
         # print("dials refercne shape", dials_reference.shape)
 
-        hkl = metadata[:,1:4].to(torch.int)
-        print("hkl shape", hkl.shape)
-        self.full_data_set = TensorDataset(
-            shoeboxes, metadata, dead_pixel_mask, counts, hkl#, dials_reference[:10000]
+
+        metadata = torch.load(
+            os.path.join(self.data_loader_settings.data_directory, self.data_loader_settings.data_file_names["metadata"]), weights_only=True
         )
+
+
+
+        print("Metadata shape:", metadata.shape) #(d, h,k, l ,x, y, z)
+        # metadata = torch.zeros(shoeboxes.shape[0], 7)
+
+        # hkl = metadata[:,1:4].to(torch.int)
+        # print("hkl shape", hkl.shape)
+
+        hkl = metadata[:,6:9].to(torch.int)
+        print("hkl shape", hkl.shape)
+
+        # Use custom dataset for on-the-fly normalization
+        self.full_data_set = ShoeboxTensorDataset(
+            shoeboxes=shoeboxes,
+            metadata=metadata,
+            dead_pixel_mask=dead_pixel_mask,
+            counts=counts,
+            hkl=hkl,
+            mean=mean,
+            var=var,
+        )
+        print("Metadata shape full tensor:", self.full_data_set.metadata.shape) #(d, h,k, l ,x, y, z)
+
+        # print("concentration shape", torch.load(
+        #     os.path.join(self.settings.data_directory, "concentration.pt"), weights_only=True
+        # ).shape)
 
     def append_image_id_to_metadata_(self) -> None:
             image_ids = self._get_image_ids_from_shoeboxes(
-                shoebox_data_set=self.full_data_set.tensors[0]
+                shoebox_data_set=self.full_data_set.shoeboxes
             )
             data_as_list = list(self.full_data_set.tensors)
             data_as_list[1] = torch.cat(
@@ -110,9 +141,10 @@ class CrystallographicDataLoader():
             )
             self.full_data_set.tensors = tuple(data_as_list)
     
-    def _cut_metadata(self, metadata: torch.Tensor) -> torch.Tensor:
-        indices_to_keep = torch.tensor([self.settings.metadata_indices[i] for i in self.settings.metadata_keys_to_keep], dtype=torch.long)
-        return torch.index_select(metadata, dim=1, index=indices_to_keep)
+    # def _cut_metadata(self, metadata: torch.Tensor) -> torch.Tensor:
+    #     # indices_to_keep = torch.tensor([self.settings.metadata_indices[i] for i in self.settings.metadata_keys_to_keep], dtype=torch.long)
+    #     indices_to_keep = torch.tensor(0,1)
+    #     return torch.index_select(metadata, dim=1, index=indices_to_keep)
     
 
     def _clean_shoeboxes_(self, shoeboxes: torch.Tensor, dead_pixel_mask, counts, metadata):
@@ -122,9 +154,9 @@ class CrystallographicDataLoader():
     def _split_full_data_(self) -> None:
         full_data_set_length = len(self.full_data_set)
         validation_data_set_length = int(
-            full_data_set_length * self.settings.validation_set_split
+            full_data_set_length * self.data_loader_settings.validation_set_split
         )
-        test_data_set_length = int(full_data_set_length * self.settings.test_set_split)
+        test_data_set_length = int(full_data_set_length * self.data_loader_settings.test_set_split)
         train_data_set_length = (
             full_data_set_length - validation_data_set_length - test_data_set_length
         )
@@ -136,7 +168,7 @@ class CrystallographicDataLoader():
 
     def load_data_(self) -> None:
         self._get_raw_shoebox_data_()
-        if self.settings.append_image_id_to_metadata:
+        if not self.use_standard_sampler and self.data_loader_settings.append_image_id_to_metadata:
             self.append_image_id_to_metadata_()
         # self._clean_data_()
         self._split_full_data_()
@@ -157,168 +189,130 @@ class CrystallographicDataLoader():
             )
         return image_ids
         
-    def _map_images_to_shoeboxes(self, shoebox_data_set: torch.Tensor) -> dict:
+    def _map_images_to_shoeboxes(self, shoebox_data_set: torch.Tensor, metadata:torch.Tensor) -> dict:
         """Returns a dictionary with image ids as keys and indices of all shoeboxes 
             belonging to that image as values."""
         
-        image_ids = self._get_image_ids_from_shoeboxes(
-            shoebox_data_set=shoebox_data_set
-        )
+        # image_ids = self._get_image_ids_from_shoeboxes(
+        #     shoebox_data_set=shoebox_data_set
+        # )
+        print("metadata shape", metadata.shape)
+        image_ids = metadata[:,2].round().to(torch.int64)  # Convert to integer type
+        print("image ids", image_ids)
+        import numpy as np
+        unique_ids = torch.unique(image_ids)
+        # print("Number of unique image IDs:", len(unique_ids))
+        # print("First few unique image IDs:", unique_ids[:10])
+        # print("Total number of image IDs:", len(image_ids))
+        # print("Min image ID:", image_ids.min().item())
+        # print("Max image ID:", image_ids.max().item())
+        # print("Number of negative values:", (image_ids < 0).sum().item())
+        # print("Number of zero values:", (image_ids == 0).sum().item())
+        
         images_to_shoebox_indices = {}
         for shoebox_index, image_id in enumerate(image_ids):
-            if image_id not in images_to_shoebox_indices:
-                images_to_shoebox_indices[image_id] = []
-            images_to_shoebox_indices[image_id].append(shoebox_index)
+            image_id_int = image_id.item()  # Convert tensor to Python int
+            if image_id_int not in images_to_shoebox_indices:
+                images_to_shoebox_indices[image_id_int] = []
+            images_to_shoebox_indices[image_id_int].append(shoebox_index)
+        
+        # print("Number of keys in dictionary:", len(images_to_shoebox_indices))
         return images_to_shoebox_indices
 
 
     class BatchByImageSampler(Sampler):
-        
-        image_id_to_indices: dict
-        settings: DataLoaderSettings
-
-        def __init__(self, 
-                     image_id_to_indices: dict, 
-                     settings: DataLoaderSettings,
-            ) -> None: 
-            self.image_id_to_indices = image_id_to_indices
-            self.settings = settings
-            self.batches = self._get_batches()
-
-        def __len__(self):
-            return len(self.batches)
-            
-
-        def _list_of_shoebox_indices_by_image(self, number_of_images_per_batch: int) -> list:
-            shoebox_indices = list(itertools.chain.from_iterable(
-                    random.sample(
-                        list(self.image_id_to_indices.values()), 
-                        number_of_images_per_batch
-                    )
-                )
-            )
-            if self.settings.shuffle_indices:
-                random.shuffle(shoebox_indices)
-            return shoebox_indices
-        
-        def _get_batches(
-                self,
-            ) -> list:
-            batches = []
-            if self.settings.optimize_shoeboxes_per_batch:
-                average_shoeboxes_per_image = (
-                    (sum(len(shoeboxes) for shoeboxes in self.image_id_to_indices.values()
-                        ) // len(self.image_id_to_indices))
-                )
-                number_of_images_required = -(-self.settings.number_of_shoeboxes_per_batch//average_shoeboxes_per_image)
-
-                if self.settings.verbose:
-                    print("Average shoeboxes per image:", average_shoeboxes_per_image)
-                    print("Number of images per batch:", number_of_images_required)
-                if number_of_images_required > len(self.image_id_to_indices):
-                    raise ValueError(
-                        f"The number of images required = {number_of_images_required} "
-                        f"is larger than the number of images = {len(self.image_id_to_indices)}."
-                    )
-                for _ in range(self.settings.number_of_batches):
-                    batch = self._list_of_shoebox_indices_by_image(
-                                    number_of_images_per_batch=number_of_images_required
-                                        )[:self.settings.number_of_shoeboxes_per_batch]
-                    while len(batch) < self.settings.number_of_shoeboxes_per_batch:
-                        batch += self._list_of_shoebox_indices_by_image(
-                                    number_of_images_per_batch=1
-                                        )[:self.settings.number_of_shoeboxes_per_batch - len(batch)]
-                    batches.append(batch)
-
-                return batches
-            else:
-                return [self._list_of_shoebox_indices_by_image(
-                    number_of_images_per_batch=self.settings.number_of_images_per_batch
-                        ) 
-                        for _ in range(self.settings.number_of_batches)]
-                    
+        def __init__(self, image_id_to_indices: dict, data_loader_settings: settings.DataLoaderSettings):
+            self.data_loader_settings = data_loader_settings
+            # each element is a list of all shoebox-indices for one image
+            self.image_indices_list = list(image_id_to_indices.values())
+            self.batch_size = data_loader_settings.number_of_shoeboxes_per_batch
+            self.num_batches = data_loader_settings.number_of_batches
+            self.shuffle_groups = getattr(data_loader_settings, "shuffle_groups", True)
 
         def __iter__(self):
-            if self.settings.shuffle_groups:
-                random.shuffle(self.batches)
-            return iter(self.batches)
-            # for batch in self.batches:
-            #     yield batch
+            images = self.image_indices_list.copy()
+            print("len images", len(images))
+            if self.shuffle_groups:
+                random.shuffle(images)
+
+            batch = []
+            batch_count = 0
+            # image_number = 0
+            for image in images:
+                # image_number +=1
+                for shoebox in image:
+                    batch.append(shoebox)
+                    if len(batch) == self.batch_size:
+                        # print("number of images", image_number)
+                        # image_number = 0
+                        yield batch
+                        batch = []
+                        batch_count += 1
+                        if batch_count >= self.num_batches:
+                            return  
+
+        def __len__(self):
+            return self.num_batches
 
     def load_data_set_batched_by_image(self, 
                                        data_set_to_load: torch.utils.data.dataset.Subset | torch.utils.data.TensorDataset,
         ) -> torch.utils.data.dataloader.DataLoader:
+        if self.use_standard_sampler:
+            return DataLoader(
+                data_set_to_load,
+                batch_size=self.data_loader_settings.number_of_shoeboxes_per_batch,
+                shuffle=self.data_loader_settings.shuffle_indices,
+                num_workers=self.data_loader_settings.number_of_workers,
+                pin_memory=self.data_loader_settings.pin_memory,
+            )
 
         if isinstance(data_set_to_load, torch.utils.data.dataset.Subset):
+            print("Metadata shape full tensor in loadeing:", self.full_data_set.metadata.shape) #(d, h,k, l ,x, y, z)
+
             image_id_to_indices = self._map_images_to_shoeboxes(
-                shoebox_data_set=self.full_data_set.tensors[0][data_set_to_load.indices]
+                shoebox_data_set=self.full_data_set.shoeboxes[data_set_to_load.indices],
+                metadata=self.full_data_set.metadata[data_set_to_load.indices]
             )
         else:
             image_id_to_indices = self._map_images_to_shoeboxes(
-                shoebox_data_set=self.full_data_set.tensors[0]
+                shoebox_data_set=self.full_data_set.shoeboxes
             )
 
         batch_by_image_sampler = self.BatchByImageSampler(
             image_id_to_indices=image_id_to_indices,
-            settings=self.settings
+            data_loader_settings=self.data_loader_settings
             )
         return DataLoader(
             data_set_to_load,
             batch_sampler=batch_by_image_sampler,
-            num_workers=self.settings.number_of_workers,
-            pin_memory=self.settings.pin_memory,
-            prefetch_factor=self.settings.prefetch_factor,
+            num_workers=self.data_loader_settings.number_of_workers,
+            pin_memory=self.data_loader_settings.pin_memory,
+            prefetch_factor=self.data_loader_settings.prefetch_factor,
         )
     
     def load_data_for_logging_during_training(self, number_of_shoeboxes_to_log: int = 5) -> torch.utils.data.dataloader.DataLoader:
+        if self.use_standard_sampler:
+            subset = Subset(self.train_data_set, indices=range(number_of_shoeboxes_to_log))
+            return DataLoader(subset, batch_size=number_of_shoeboxes_to_log)
+
         image_id_to_indices = self._map_images_to_shoeboxes(
-                shoebox_data_set=self.full_data_set.tensors[0][self.train_data_set.indices]
+                shoebox_data_set=self.full_data_set.shoeboxes[self.train_data_set.indices],
+                metadata=self.full_data_set.metadata[self.train_data_set.indices]
             )
-        settings = dataclasses.replace(self.settings, number_of_shoeboxes_per_batch=number_of_shoeboxes_to_log, number_of_batches=1)
+        data_loader_settings = dataclasses.replace(self.data_loader_settings, number_of_shoeboxes_per_batch=number_of_shoeboxes_to_log, number_of_batches=1)
         batch_by_image_sampler = self.BatchByImageSampler(
             image_id_to_indices=image_id_to_indices,
-            settings=settings
+            data_loader_settings=data_loader_settings
             )
         return DataLoader(
             self.train_data_set,
             batch_sampler=batch_by_image_sampler,
-            num_workers=self.settings.number_of_workers,
-            pin_memory=self.settings.pin_memory,
-            prefetch_factor=self.settings.prefetch_factor,
+            num_workers=self.data_loader_settings.number_of_workers,
+            pin_memory=self.data_loader_settings.pin_memory,
+            prefetch_factor=self.data_loader_settings.prefetch_factor,
             persistent_workers=True
         )
 
 
     
-def test(settings: DataLoaderSettings):
-    print("enter test")
-    dataloader = CrystallographicDataLoader(settings=settings)
-    print("Loading data ...")	
-    dataloader.load_data_()
-    print("Data loaded successfully.")
-        
-    test_data = dataloader.load_data_set_batched_by_image(
-        data_set_to_load=dataloader.test_data_set
-    )
-    print("Test data loaded successfully.")
-    for batch in test_data:
-        shoeboxes_batch, metadata_batch, dead_pixel_mask_batch, counts_batch = batch
-        print("Batch shoeboxes shape:", shoeboxes_batch.shape)
-    return test_data
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Pass DataLoader settings")
-    parser.add_argument(
-        "--data_directory",
-        type=str,
-        help="Path to the data directory",
-    )
-    return parser.parse_args()
-
-def main():
-    args = parse_args()
-    settings = DataLoaderSettings(data_directory=args.data_directory, test_set_split=0.91)
-    test(settings=settings)
-
-if __name__ == "__main__":
-    main()

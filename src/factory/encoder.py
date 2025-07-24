@@ -157,7 +157,7 @@ class MLPMetadataEncoder(torch.nn.Module):
     def __init__(
         self, depth=10, dmodel=64, feature_dim=2, output_dims=64, dropout=None
     ):
-        # super().__init__()
+        super().__init__()
         self.linear = torch.nn.Linear(feature_dim, dmodel)
         # self.relu = torch.nn.ReLU(inplace=True)
         self.relu = torch.nn.ReLU()

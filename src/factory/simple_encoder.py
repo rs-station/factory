@@ -118,14 +118,14 @@ class ResidualLayer(nn.Module):
         return out
 
 class MLPMetadataEncoder(nn.Module):
-    def __init__(self, feature_dim, depth=10, dropout=0.0, output_dims=None):
+    def __init__(self, feature_dim, depth=8, dropout=0.0, output_dims=None):
         super().__init__()
         layers = []
         hidden_dim = feature_dim * 2
 
         # Input layer
         layers.append(Linear(feature_dim, hidden_dim))
-        layers.append(nn.LayerNorm(hidden_dim))  #
+        # layers.append(nn.LayerNorm(hidden_dim))  #
         layers.append(nn.ReLU())
 
         # Residual blocks
@@ -134,8 +134,8 @@ class MLPMetadataEncoder(nn.Module):
 
         # Output layer if needed
         if output_dims is not None:
-            layers.append(nn.LayerNorm(hidden_dim))
-            layers.append(nn.ReLU())
+            # layers.append(nn.LayerNorm(hidden_dim))
+            # layers.append(nn.ReLU())
             layers.append(Linear(hidden_dim, output_dims))
 
         self.model = nn.Sequential(*layers)

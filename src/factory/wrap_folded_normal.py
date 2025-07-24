@@ -27,6 +27,15 @@ class FrequencyTrackingPosterior(FoldedNormalPosterior):
             "observation_count", torch.zeros(self.rac.rac_size, dtype=torch.long)
         )
     
+    # def to(self, *args, **kwargs):
+    #     super().to(*args, **kwargs)
+    #     device = next(self.parameters()).device
+    #     if hasattr(self, 'observation_count'):
+    #         self.observation_count = self.observation_count.to(device)
+    #     if hasattr(self, 'observed'):
+    #         self.observed = self.observed.to(device)
+    #     return self
+    
     def update_observed(self, rasu_id: torch.Tensor, H: torch.Tensor) -> None:
         """
         Update both the observed buffer and the observation count.
@@ -36,8 +45,13 @@ class FrequencyTrackingPosterior(FoldedNormalPosterior):
                 rasu ID of each reflection.
             H (torch.Tensor): A tensor of shape (n_refln, 3).
         """
+        
         h, k, l = H.T
+
+        
         observed_idx = self.rac.reflection_id_grid[rasu_id, h, k, l]
+
+        
         self.observed[observed_idx] = True
         self.observation_count[observed_idx] += 1
     
