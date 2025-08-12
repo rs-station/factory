@@ -12,20 +12,29 @@ import torch
 
 REGISTRY = {
     "HalfNormalDistribution": distributions.HalfNormalDistribution,
+    "ExponentialDistribution": distributions.ExponentialDistribution,
     "TorchGamma": torch.distributions.Gamma,
     "DirichletProfile": distributions.DirichletProfile,
+    "LRMVN_Distribution": distributions.LRMVN_Distribution,
     "WilsonPrior": WilsonPrior,
     "LogNormalDistributionLayer": networks.LogNormalDistributionLayer,
     "FoldedNormalDistributionLayer": networks.FoldedNormalDistributionLayer,
     "GammaDistributionLayer": networks.GammaDistributionLayer,
     "DeltaDistributionLayer": networks.DeltaDistributionLayer,
+    "SoftplusNormalDistributionLayer": networks.SoftplusNormalDistributionLayer,
+    "TruncatedNormalDistributionLayer": networks.TruncatedNormalDistributionLayer,
     "BaseShoeboxEncoder": shoebox_encoder.BaseShoeboxEncoder,
     "BaseMetadataEncoder": metadata_encoder.BaseMetadataEncoder,
     "SimpleShoeboxEncoder": shoebox_encoder.SimpleShoeboxEncoder,
     "SimpleMetadataEncoder": metadata_encoder.SimpleMetadataEncoder,
+    "IntensityEncoder": shoebox_encoder.IntensityEncoder,
     "MLPScale": networks.MLPScale,
     "LogNormalDistribution": torch.distributions.LogNormal,
     "TorchUniform": torch.distributions.Uniform,
+    "TorchHalfNormal": torch.distributions.HalfNormal,
+    "TorchExponential": torch.distributions.Exponential,
+    "rsFoldedNormal": networks.FoldedNormal,
+    
 }
 
 def _log_settings_from_yaml(path: str, logger: WandbLogger):
@@ -59,7 +68,11 @@ def consistancy_check(model_settings_dict: dict):
         model_settings_dict["shoebox_encoder"].setdefault("params", {})["out_dim"] = dmodel
 
     if "metadata_encoder" in model_settings_dict:
-        model_settings_dict["metadata_encoder"].setdefault("params", {})["feature_dim"] = len(metadata_indices)
+        if model_settings_dict.get("use_positional_encoding", False) == True:
+            number_of_frequencies = model_settings_dict.get("number_of_frequencies_in_positional_encoding", 2)
+            model_settings_dict["metadata_encoder"].setdefault("params", {})["feature_dim"] = len(metadata_indices) * number_of_frequencies * 2
+        else:
+            model_settings_dict["metadata_encoder"].setdefault("params", {})["feature_dim"] = len(metadata_indices)
         model_settings_dict["metadata_encoder"]["params"]["output_dims"] = dmodel
 
     if "scale_function" in model_settings_dict:

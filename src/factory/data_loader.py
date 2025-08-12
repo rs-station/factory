@@ -34,7 +34,8 @@ class ShoeboxTensorDataset(Dataset):
     def __getitem__(self, idx):
         # Normalize on the fly
         counts = self.counts[idx]
-        normed_shoebox = (counts - self.mean) / torch.sqrt(self.var)
+        normed_shoebox = torch.log1p(counts)
+        # normed_shoebox = (counts - self.mean) / torch.sqrt(self.var)
         return (
             normed_shoebox,
             self.metadata[idx],
@@ -231,20 +232,20 @@ class CrystallographicDataLoader():
 
         def __iter__(self):
             images = self.image_indices_list.copy()
-            print("len images", len(images))
+            # print("len images", len(images))
             if self.shuffle_groups:
                 random.shuffle(images)
 
             batch = []
             batch_count = 0
-            # image_number = 0
+            image_number = 0
             for image in images:
-                # image_number +=1
+                image_number +=1
                 for shoebox in image:
                     batch.append(shoebox)
                     if len(batch) == self.batch_size:
-                        # print("number of images", image_number)
-                        # image_number = 0
+                        print("number of images", image_number)
+                        image_number = 0
                         yield batch
                         batch = []
                         batch_count += 1

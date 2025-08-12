@@ -69,17 +69,18 @@ def run(config_path=None, run_from_version=False):
         logged_artifact = wandb_logger.experiment.log_artifact(config_artifact)
 
     else:
-        run_name = f"{now_str}_continue-run-18"
+        run_name = f"{now_str}_continue-run-44"
         wandb_logger = WandbLogger(project="full-model", name=run_name, save_dir="/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/lightning_logs")
         wandb.init(
             project="full-model",
             name=run_name,
             dir="/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/lightning_logs"
         )
-        
-        config_artifact = wandb.use_artifact(f"flaviagiehr-harvard-university/full-model/config:v25", type="config")
-        config_artifact_dir = config_artifact.download()
-        config_path = os.path.join(config_artifact_dir, "config_example.yaml")
+        config_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/factory/configs/config_example.yaml"
+
+        # config_artifact = wandb.use_artifact(f"flaviagiehr-harvard-university/full-model/config:v25", type="config")
+        # config_artifact_dir = config_artifact.download()
+        # config_path = os.path.join(config_artifact_dir, "config_example.yaml")
         with open(config_path, "r") as f:
             config_dict = yaml.safe_load(f)
         model_settings, loss_settings, phenix_settings, dataloader_settings = load_settings_from_yaml(config_dict)
@@ -101,18 +102,12 @@ def run(config_path=None, run_from_version=False):
         # config_artifact = wandb.Artifact("model_config", type="config")
         # config_artifact.add_file(checkpoint_path)  # Path to your config file
 
-    if dataloader_settings is None:
-        data_loader_settings = settings.DataLoaderSettings(
-            data_directory=model_settings.data_directory,
-            data_file_names=model_settings.data_file_names)
-    else:
-        # Optionally fill in missing fields from model_settings if needed
-        if not hasattr(dataloader_settings, 'data_directory') or dataloader_settings.data_directory is None:
-            dataloader_settings.data_directory = model_settings.data_directory
-        if not hasattr(dataloader_settings, 'data_file_names') or dataloader_settings.data_file_names is None:
-            dataloader_settings.data_file_names = model_settings.data_file_names
-        data_loader_settings = dataloader_settings
-    dataloader = data_loader.CrystallographicDataLoader(data_loader_settings=data_loader_settings)
+    # if dataloader_settings is None:
+    #     data_loader_settings = settings.DataLoaderSettings(
+    #         data_directory=model_settings.data_directory,
+    #         data_file_names=model_settings.data_file_names)
+   
+    dataloader = data_loader.CrystallographicDataLoader(data_loader_settings=dataloader_settings)
     print("Loading data ...")
     dataloader.load_data_()
     print("Data loaded successfully.")

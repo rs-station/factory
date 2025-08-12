@@ -11,29 +11,29 @@ from abismal_torch.prior import WilsonPrior
 from rasu import *
 from abismal_torch.likelihood import NormalLikelihood
 from abismal_torch.surrogate_posterior import FoldedNormalPosterior
-from wrap_folded_normal import FrequencyTrackingPosterior
+from wrap_folded_normal import FrequencyTrackingPosterior, SparseFoldedNormalPosterior
 
-import shoebox_encoder
-import metadata_encoder
+import shoebox_encoder as se
+import metadata_encoder as me
+# from lazy_adam import LazyAdamW
 
 
 @dataclasses.dataclass
 class ModelSettings():
     run_from_version: str | None = None
-
+    data_directory: str = "/n/hekstra_lab/people/aldama/subset/small_dataset/pass1"
+    data_file_names: dict = dataclasses.field(default_factory=lambda: {
+        # "shoeboxes": "standardized_counts.pt",
+        "counts": "counts.pt",
+        "metadata": "reference_.pt",
+        "masks": "masks.pt",
+    })
     build_background_distribution: type = distributions.HalfNormalDistribution
     build_profile_distribution: type = distributions.Distribution
     # build_shoebox_profile_distribution = distributions.LRMVN_Distribution
     build_shoebox_profile_distribution: type = distributions.DirichletProfile
-    # background_prior_distribution: torch.distributions.Gamma = dataclasses.field(
-    #     default_factory=lambda: torch.distributions.Gamma(concentration=torch.tensor(1.98), rate=torch.tensor(1/75.4))
-    # )
     background_prior_distribution: torch.distributions.Gamma = dataclasses.field(
-        default_factory=lambda: torch.distributions.HalfNormal(0.5)
-    )
-    # scale_prior_distibution: torch.distributions.HalfNormal = dataclasses.field(
-    #     default_factory=lambda: torch.distributions.HalfNormal(2.0)
-    # )
+        default_factory=lambda: torch.distributions.HalfNormal(0.5))
     scale_prior_distibution: torch.distributions.Gamma = dataclasses.field(
         default_factory=lambda: torch.distributions.Gamma(concentration=torch.tensor(6.68), rate=torch.tensor(6.4463))
     )
@@ -48,28 +48,29 @@ class ModelSettings():
     )
     build_intensity_prior_distribution: WilsonPrior = WilsonPrior
     intensity_prior_distibution: WilsonPrior = dataclasses.field(init=False)
+
+    use_surrogate_parameters: bool = False
     
-    shoebox_encoder: type = shoebox_encoder.BaseShoeboxEncoder()
-    metadata_encoder: type = metadata_encoder.BaseMetadataEncoder()
+    shoebox_encoder: type = se.BaseShoeboxEncoder()
+    metadata_encoder: type = me.BaseMetadataEncoder()
+    intensity_encoder: type = se.IntensityEncoder()
     metadata_depth: int = 10
     metadata_indices_to_keep: list = dataclasses.field(default_factory=lambda: [0, 1])
+    use_positional_encoding: bool = False
+    number_of_frequencies_in_positional_encoding: int = 2
 
 
 
-    optimizer: type = torch.optim.AdamW
+    optimizer: type = torch.optim.AdamW #torch.optim.AdamW
+    optimizer_betas: tuple = (0.9, 0.9)
     learning_rate: float = 0.001
+    surrogate_posterior_learning_rate: float = 0.01  # Higher learning rate for surrogate posterior
+    weight_decay: float = 0.0001  # Weight decay for main parameters
+    surrogate_weight_decay: float = 0.0001  # Weight decay for surrogate parameters
     dmodel: int = 64
     # batch_size = 4
     number_of_epochs: int = 5
     number_of_mc_samples: int = 20
-
-    data_directory: str = "/n/hekstra_lab/people/aldama/subset/small_dataset/pass1"
-    data_file_names: dict = dataclasses.field(default_factory=lambda: {
-        # "shoeboxes": "standardized_counts.pt",
-        "counts": "counts.pt",
-        "metadata": "reference.pt",
-        "masks": "masks.pt",
-    })
 
     enable_checkpointing: bool = True
     lysozyme_sequence_file_path: str = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/factory/data/lysozyme.seq"
@@ -79,6 +80,8 @@ class ModelSettings():
     protein_pdb_url: str = "https://files.rcsb.org/download/9B7C.cif"
     rac: ReciprocalASUCollection = dataclasses.field(init=False)
     pdb_data: dict = dataclasses.field(init=False)
+    # surrogate_posterior_parameters: dict = dataclasses.field(init=False)
+
     def __post_init__(self):
         self.pdb_data = get_protein_data.get_protein_data(self.protein_pdb_url)
         self.rac = ReciprocalASUGraph(*[ReciprocalASU(
@@ -131,7 +134,7 @@ class DataLoaderSettings():
     data_file_names: dict = dataclasses.field(default_factory=lambda: {
         # "shoeboxes": "standardized_counts.pt",
         "counts": "counts.pt",
-        "metadata": "reference.pt",
+        "metadata": "reference_.pt",
         "masks": "masks.pt",
     })
 

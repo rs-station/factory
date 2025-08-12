@@ -1,0 +1,103 @@
+model_settings:
+
+  # run_from_version: 44
+
+  # External references
+  lysozyme_sequence_file_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/factory/data/lysozyme.seq"
+  merged_mtz_file_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/merged.mtz"
+  unmerged_mtz_file_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/unmerged.mtz"
+  protein_pdb_url: "https://files.rcsb.org/download/9B7C.cif"
+
+  # Model & training config
+  dmodel: 32
+  number_of_mc_samples: 20
+  learning_rate: 0.001
+  surrogate_posterior_learning_rate: 0.001
+
+  optimizer_betas: [0.9, 0.999]
+
+  build_background_distribution: HalfNormalDistribution
+  build_shoebox_profile_distribution: DirichletProfile #LRMVN_Distribution #DirichletProfile
+  build_intensity_prior_distribution: WilsonPrior
+
+  use_surrogate_parameters: False
+
+  # scale_prior_distribution: LogNormal
+  # scale_prior_mean: 2.0
+  # scale_prior_variance: 6241.0
+  # scale_distribution: FoldedNormalDistributionLayer
+
+  # Encoder
+  metadata_encoder: 
+    name: BaseMetadataEncoder
+    params:
+      depth: 10
+
+  shoebox_encoder: 
+    name: BaseShoeboxEncoder
+    params:
+      # in_channels: 1
+      conv1_out_channels: 64
+      conv2_out_channels: 128
+      conv1_kernel: [1,3,3]
+      conv1_padding: [0,1,1]
+
+  intensity_encoder:
+    name: IntensityEncoder
+    params:
+      out_dim: 32
+      in_channels: 1
+      conv1_out_channels: 64
+      conv2_out_channels: 128
+      conv3_out_channels: 256
+      conv1_kernel: [3,3,3]
+      conv1_padding: [1,1,1]
+
+  scale_function:
+    name: MLPScale
+    params:
+      scale_distribution: DeltaDistributionLayer # SoftplusNormalDistributionLayer
+      number_of_layers: 1
+
+  scale_prior_distibution:
+    # name: TorchLognormal
+    # params:
+    #   scale: 0.37
+    name: rsFoldedNormal
+    params:
+      loc: 1.032
+      scale: 0.4
+
+    # name: TorchGamma
+    # params:
+    #   concentration: 6.68
+    #   rate: 0.001
+  
+  background_prior_distribution:
+    # name: TorchHalfNormal
+    # params:
+    #   scale: 1
+    name: TorchExponential
+    params:
+      rate: 1.1
+
+  metadata_indices_to_keep: [0,1,2,3,4,5,6,7,8,16]
+  use_positional_encoding: False
+  number_of_frequencies_in_positional_encoding: 6
+
+
+dataloader_settings:
+  number_of_shoeboxes_per_batch: 3000
+
+loss_settings:
+  prior_background_weight: 0.02
+  prior_structure_factors_weight: 0.001
+  prior_scale_weight: 0.0
+  prior_profile_weight: 0.04
+
+phenix_settings:
+  r_values_reference_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/pdb_model/refine_001.log"
+  
+
+
+

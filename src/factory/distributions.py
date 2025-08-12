@@ -5,7 +5,7 @@ from networks import Linear
 import math
 
 from networks import Linear, Constraint
-from torch.distributions import HalfNormal
+from torch.distributions import HalfNormal, Exponential
 
 from abc import ABC, abstractmethod
 
@@ -91,6 +91,9 @@ class DirichletProfile(ProfileDistribution):
         self.num_components = input_shape[0] * input_shape[1] * input_shape[2]
         if dmodel is not None:
             self.alpha_layer = Linear(dmodel, self.num_components)
+            # Make profile parameters non-trainable
+            # for param in self.alpha_layer.parameters():
+            #     param.requires_grad = False
         self.dmodel = dmodel
         self.eps = 1e-6
         concentration_vector[concentration_vector>torch.quantile(concentration_vector, 0.99)] *= 40
@@ -119,10 +122,36 @@ class DirichletProfile(ProfileDistribution):
     def forward(self, *representations):
         alphas = sum(representations) if len(representations) > 1 else representations[0]
         print("alpha shape", alphas.shape)
+        
+        # Check for NaN values in input representations
+        if torch.isnan(alphas).any():
+            print("WARNING: NaN values detected in input representations!")
+            print("NaN count:", torch.isnan(alphas).sum().item())
+            print("Input stats - min:", alphas.min().item(), "max:", alphas.max().item(), "mean:", alphas.mean().item())
+        
         if self.dmodel is not None:
             alphas = self.alpha_layer(alphas)
+            # Check for NaN values after linear layer
+            if torch.isnan(alphas).any():
+                print("WARNING: NaN values detected after alpha_layer!")
+                print("NaN count:", torch.isnan(alphas).sum().item())
+                print("Alpha layer output stats - min:", alphas.min().item(), "max:", alphas.max().item(), "mean:", alphas.mean().item())
+        
         alphas = F.softplus(alphas) + self.eps
+        print("profile alphas shape", alphas.shape)
+        
+        # Check for NaN values after softplus
+        if torch.isnan(alphas).any():
+            print("WARNING: NaN values detected after softplus!")
+            print("NaN count:", torch.isnan(alphas).sum().item())
+            print("Softplus output stats - min:", alphas.min().item(), "max:", alphas.max().item(), "mean:", alphas.mean().item())
+            
+            # Replace NaN values with a safe default
+        
+        # Ensure all values are positive and finite
+        
         self.q_p = torch.distributions.Dirichlet(alphas)
+        print("profile q_p shape", self.q_p.rsample().shape)
         return self.q_p
 
 class Distribution(torch.nn.Module):
@@ -159,6 +188,33 @@ class HalfNormalDistribution(torch.nn.Module):
         norm = self.distribution(params)
         return norm
 
+class ExponentialDistribution(torch.nn.Module):
+    def __init__(
+        self,
+        dmodel,
+        constraint=Constraint(),
+        out_features=1,
+    ):
+        super().__init__()
+        self.fc = Linear(
+            in_features=dmodel,
+            out_features=out_features,
+        )
+        self.constraint = constraint
+        self.min_value = 1e-3
+        self.max_value = 100.0
+
+    def distribution(self, params):
+        scale = self.constraint(params)
+        # scale = torch.clamp(scale, min=self.min_value, max=self.max_value)
+        return torch.distributions.Exponential(scale)
+
+    def forward(self, representation):
+        params = self.fc(representation)
+        norm = self.distribution(params)
+        return norm
+
+
 class LRMVN_Distribution(torch.nn.Module):
 
     mvn_mean_distribution: torch.distributions.Normal
@@ -169,9 +225,9 @@ class LRMVN_Distribution(torch.nn.Module):
     prior_mvn_cov_factor: torch.distributions.Normal
     prior_mvn_cov_scale: torch.distributions.HalfNormal
 
-    def __init__(self, hidden_dim=64, number_of_mc_samples=100):
+    def __init__(self, dmodel=64, number_of_mc_samples=100):
         super().__init__()
-        self.hidden_dim = hidden_dim
+        self.hidden_dim = dmodel
         self.number_of_mc_samples = number_of_mc_samples
 
         self.d = 3
@@ -278,7 +334,7 @@ class LRMVN_Distribution(torch.nn.Module):
         avg_profile = profile.mean(dim=1)
         avg_profile = avg_profile / (avg_profile.sum(dim=-1, keepdim=True) + 1e-10)
 
-        return profile
+        return profile_mvn_distribution #profile
 
     def forward(self, *representations: torch.Tensor) -> torch.distributions.LowRankMultivariateNormal:
         """Forward pass of the LRMVN distribution."""
@@ -329,7 +385,8 @@ class LRMVN_Distribution(torch.nn.Module):
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
-        device = self.device
+        # Get device from the first parameter
+        device = next(self.parameters()).device
         
         # Move all registered buffers
         for name, buffer in self.named_buffers():

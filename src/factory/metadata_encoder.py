@@ -146,6 +146,19 @@ class BaseMetadataEncoder(nn.Module):
         self.model = nn.Sequential(*layers)
 
     def forward(self, x):
+        # Check input for NaN values
+        if torch.isnan(x).any():
+            print("WARNING: NaN values in BaseMetadataEncoder input!")
+            print("NaN count:", torch.isnan(x).sum().item())
+            print("Stats - min:", x.min().item(), "max:", x.max().item(), "mean:", x.mean().item())
+        
         # Process through the model
         x = self.model(x)
+        
+        # Check output for NaN values
+        if torch.isnan(x).any():
+            print("WARNING: NaN values in BaseMetadataEncoder output!")
+            print("NaN count:", torch.isnan(x).sum().item())
+            print("Stats - min:", x.min().item(), "max:", x.max().item(), "mean:", x.mean().item())
+        
         return x

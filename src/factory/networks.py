@@ -12,6 +12,7 @@ def weight_initializer(weight):
     a = -2.0 * std
     b = 2.0 * std
     torch.nn.init.trunc_normal_(weight, 0.0, std, a, b)
+    
     return weight
 
 class Linear(torch.nn.Linear):
@@ -20,6 +21,24 @@ class Linear(torch.nn.Linear):
 
     def reset_parameters(self) -> None:
         self.weight = weight_initializer(self.weight)
+    
+    def forward(self, input):
+        # Check for NaN values in input
+        if torch.isnan(input).any():
+            print(f"WARNING: NaN values in Linear layer input! Shape: {input.shape}")
+            print("NaN count:", torch.isnan(input).sum().item())
+        
+        output = super().forward(input)
+        
+        # Check for NaN values in output
+        if torch.isnan(output).any():
+            print(f"WARNING: NaN values in Linear layer output! Shape: {output.shape}")
+            print("NaN count:", torch.isnan(output).sum().item())
+            print("Weight stats - min:", self.weight.min().item(), "max:", self.weight.max().item(), "mean:", self.weight.mean().item())
+            if self.bias is not None:
+                print("Bias stats - min:", self.bias.min().item(), "max:", self.bias.max().item(), "mean:", self.bias.mean().item())
+        
+        return output
 
 class Constraint(torch.nn.Module):
     def __init__(self, eps=1e-12, beta=1.0):
@@ -89,6 +108,67 @@ class NormalDistributionLayer(torch.nn.Module):
         loc, scale = torch.unbind(hidden_representation, dim=-1)
         scale = self.bijector(scale) + 1e-3
         return torch.distributions.Normal(loc=loc, scale=scale)
+
+class SoftplusNormalDistributionLayer(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.len_params = 2
+        self.bijector = torch.nn.Softplus()
+
+    def forward(self, hidden_representation):
+        loc, scale = torch.unbind(hidden_representation, dim=-1)
+        scale = self.bijector(scale) + 1e-3
+        # self.normal = torch.distributions.Normal(loc=loc, scale=scale)
+        return SoftplusNormal(loc=loc, scale=scale)
+
+class SoftplusNormal(torch.nn.Module):
+    def __init__(self, loc, scale):
+        super().__init__()
+        self.normal = torch.distributions.Normal(loc=loc, scale=scale)
+        self.bijector = torch.nn.Softplus()
+
+    def rsample(self, sample_shape=[1]):
+        return self.bijector(self.normal.rsample(sample_shape)).unsqueeze(-1)
+
+    def log_prob(self,x):
+        # x: sample (must be > 0), mu and sigma are parameters
+        z = torch.log(torch.expm1(x))  # inverse softplus
+        normal = self.normal
+        log_pz = normal.log_prob(z)
+        log_det_jacobian = -torch.nn.functional.softplus(-z)  # = -log(sigmoid(z))
+        return log_pz + log_det_jacobian
+
+    def forward(self, x, number_of_samples=1):
+        return self.bijector(self.normal(x))
+
+class TruncatedNormalDistributionLayer(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.len_params = 2
+        self.bijector = torch.nn.Softplus()
+
+    def forward(self, hidden_representation):
+        loc, scale = torch.unbind(hidden_representation, dim=-1)
+        scale = self.bijector(scale) + 1e-3
+        # self.normal = torch.distributions.Normal(loc=loc, scale=scale)
+        return PositiveTruncatedNormal(loc=loc, scale=scale)
+
+class PositiveTruncatedNormal(torch.nn.Module):
+    def __init__(self, loc, scale):
+        super().__init__()
+        self.normal = torch.distributions.Normal(loc, scale)
+        self.a = (0.0 - loc) / scale  # standardized lower bound = 0
+        self.Z = torch.tensor(1.0 - self.normal.cdf(0.0), device=loc.device, dtype=loc.dtype)  # normalization constant
+
+    def rsample(self, sample_shape=torch.Size()):
+        u = torch.rand(sample_shape + self.a.shape, device=self.a.device, dtype=self.a.dtype)
+        u = u * self.Z + self.normal.cdf(0.0)  # map [0,1] to [cdf(0), 1]
+        z = self.normal.icdf(u)
+        return z
+
+    def log_prob(self, x):
+        logp = self.normal.log_prob(x)
+        return logp - torch.log(self.Z)
 
 class NormalIRSample(torch.autograd.Function):
     @staticmethod
@@ -252,7 +332,7 @@ class FoldedNormalDistributionLayer(torch.nn.Module):
     def forward(self, hidden_representation):
         loc, scale = torch.unbind(hidden_representation, dim=-1)
         scale = self.bijector(scale) + 1e-3
-        return FoldedNormal(loc=loc, scale=scale)
+        return FoldedNormal(loc=loc.unsqueeze(-1), scale=scale.unsqueeze(-1))
 
 class LogNormalDistributionLayer(torch.nn.Module):
     def __init__(self):
@@ -281,7 +361,7 @@ class GammaDistributionLayer(torch.nn.Module):
         concentration, rate = torch.unbind(hidden_representation, dim=-1)
         rate = self.bijector(rate) + 1e-3
         concentration = self.bijector(concentration) + 1e-3
-        return torch.distributions.Gamma(concentration=concentration, rate=rate)
+        return torch.distributions.Gamma(concentration=concentration.unsqueeze(-1), rate=rate.unsqueeze(-1))
 
 class MLPScale(torch.nn.Module):
     def __init__(self, input_dimension=64, scale_distribution=FoldedNormalDistributionLayer, hidden_dimension=64, number_of_layers=1, initial_scale_guess=2/140):

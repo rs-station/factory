@@ -5,6 +5,8 @@ from typing import Optional
 import settings
 from tensordict.nn.distributions import Delta
 
+from wrap_folded_normal import SparseFoldedNormalPosterior
+
 @dataclasses.dataclass
 class LossOutput():
     loss: Optional[torch.Tensor] = None
@@ -34,7 +36,26 @@ class LossFunction(torch.nn.Module):
         
         samples = predicted_distribution.rsample([50])
         log_q = predicted_distribution.log_prob(samples)
+        print(" pred", log_q)
+        log_p = target_distribution.log_prob(samples)
+        print(" target", log_p)
+        return (log_q - log_p).mean(dim=0)
+
+    def compute_kl_divergence_surrogate_parameters(self, predicted_distribution, target_distribution, ordered_miller_indices):
+
+        samples = predicted_distribution.rsample([50])
+        log_q = predicted_distribution.log_prob(samples)
         print("scale: pred", log_q)
+        log_p = target_distribution.log_prob(samples)
+
+        rasu_ids = surrogate_posterior.rac.rasu_ids[0]
+        print("prior_intensity.rsample([20]).permute(1,0)", prior_intensity.rsample([20]).permute(1,0))
+        prior_intensity_samples = surrogate_posterior.rac.gather(
+            source=prior_intensity.rsample([20]).permute(1,0).T, rasu_id=rasu_ids, H=ordered_miller_indices.to(torch.int)
+        )
+
+        
+
         log_p = target_distribution.log_prob(samples)
         print("scale: target", log_p)
         return (log_q - log_p).mean(dim=0)
@@ -56,28 +77,45 @@ class LossFunction(torch.nn.Module):
             batch_size = counts.shape[0]
 
             loss_output = LossOutput()
-            print("next cude")
 
             # print("cuda=", next(self.model_settings.intensity_prior_distibution.parameters()).device)
             prior_background = self.get_prior(model_settings.background_prior_distribution, device=device)
             print("got priors bg")
             prior_intensity = model_settings.build_intensity_prior_distribution(model_settings.rac.to(device))
             
+            
             # self.get_prior(model_settings.intensity_prior_distibution, device=device)
             print("got priors sf")
             prior_scale = self.get_prior(model_settings.scale_prior_distibution, device=device)
             print("got priors")
             # Compute KL divergence for structure factors
-            _kl_divergence_folded_normal_all_reflections = self.compute_kl_divergence(
-                surrogate_posterior, prior_intensity.distribution()
-            )
-            print("structure factor distr", surrogate_posterior.rsample([1]).shape)#, prior_intensity.rsample([1]).shape)
 
-            rasu_ids = surrogate_posterior.rac.rasu_ids[0]
+            if model_settings.use_surrogate_parameters:
 
-            _kl_divergence_folded_normal = surrogate_posterior.rac.gather(
-                source=_kl_divergence_folded_normal_all_reflections.T, rasu_id=rasu_ids, H=ordered_miller_indices.to(torch.int)
-            )
+                rasu_ids = torch.tensor([0 for _ in range(len(ordered_miller_indices))], device=device)
+
+                _kl_divergence_folded_normal = self.compute_kl_divergence(
+                        surrogate_posterior, prior_intensity.distribution(rasu_ids, ordered_miller_indices))
+                # else:
+                #     # Handle case where no valid parameters were found
+                #     raise ValueError("No valid surrogate parameters found")
+
+            elif isinstance(surrogate_posterior, SparseFoldedNormalPosterior):
+                _kl_divergence_folded_normal = self.compute_kl_divergence(
+                    surrogate_posterior.get_distribution(ordered_miller_indices), prior_intensity.distribution())
+
+            else:
+                rasu_ids = torch.tensor([0 for _ in range(len(ordered_miller_indices))], device=device)
+
+                _kl_divergence_folded_normal = self.compute_kl_divergence_verbose(
+                    surrogate_posterior, prior_intensity.distribution(rasu_ids, ordered_miller_indices))
+                print("structure factor distr", surrogate_posterior.rsample([1]).shape)#, prior_intensity.rsample([1]).shape)
+
+                # rasu_ids = surrogate_posterior.rac.rasu_ids[0]
+
+                # _kl_divergence_folded_normal = surrogate_posterior.rac.gather(
+                #     source=_kl_divergence_folded_normal_all_reflections.T, rasu_id=rasu_ids, H=ordered_miller_indices.to(torch.int)
+                # )
 
             kl_structure_factors = _kl_divergence_folded_normal * loss_settings.prior_structure_factors_weight
 

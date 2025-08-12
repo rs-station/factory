@@ -120,7 +120,6 @@ class Plotting(Callback):
         self.fixed_batch_intensity_sum_values = self.fixed_batch[1].to(pl_module.device)[:, 9]
         self.fixed_batch_intensity_sum_variance = self.fixed_batch[1].to(pl_module.device)[:, 10]
         self.fixed_batch_total_counts = self.fixed_batch[3].to(pl_module.device).sum(dim=1)
-        print("self.fixed_batch_total_counts", self.fixed_batch_total_counts.shape)
 
         self.fixed_batch_background_mean = self.fixed_batch[1].to(pl_module.device)[:, 13]
 
@@ -133,6 +132,9 @@ class Plotting(Callback):
             samples_background = photon_rate_output['samples_background']
             samples_scale = photon_rate_output['samples_scale']
             samples_predicted_structure_factor = photon_rate_output["samples_predicted_structure_factor"]
+            
+            del photon_rate_output
+            
             batch_size = shoeboxes_batch.size(0)
 
             model_intensity = samples_scale * torch.square(samples_predicted_structure_factor)
@@ -148,8 +150,8 @@ class Plotting(Callback):
 
             fig, axes = plt.subplots(
                 2, batch_size, 
-                figsize=(4*batch_size, 16),  # Keep wide, but reduce height to focus on images
-                gridspec_kw={'hspace': 0.05, 'wspace': 0.3}  # Reduce vertical space between rows
+                figsize=(4*batch_size, 16),  
+                gridspec_kw={'hspace': 0.05, 'wspace': 0.3}  
             )
             
             im_handles = []
@@ -185,12 +187,18 @@ class Plotting(Callback):
                 axes[1,b].set_title('\n'.join(title_prf_lines), pad=5, fontsize=16)
                 axes[1,b].axis('off')
                 
+                # Add individual colorbars for each column
+                # Colorbar for the raw shoebox (top row)
+                cbar1 = fig.colorbar(im1, ax=axes[0,b], orientation='vertical', fraction=0.02, pad=0.04)
+                cbar1.ax.tick_params(labelsize=8)
+                
+                # Colorbar for the profile (bottom row)
+                cbar2 = fig.colorbar(im2, ax=axes[1,b], orientation='vertical', fraction=0.02, pad=0.04)
+                cbar2.ax.tick_params(labelsize=8)
+                
            
             
             plt.tight_layout(h_pad=0.0, w_pad=0.3)  # Remove extra vertical padding
-            
-            cbar = fig.colorbar(im_handles[0], ax=axes, orientation='vertical', fraction=0.02, pad=0.04)
-            cbar.ax.tick_params(labelsize=8)
 
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
@@ -206,6 +214,10 @@ class Plotting(Callback):
             
             plt.close()
             buf.close()
+            
+            # Memory optimization: Clear large tensors after use
+            del samples_photon_rate, samples_profile, samples_background, samples_scale, samples_predicted_structure_factor
+            torch.cuda.empty_cache()  # Force GPU memory cleanup
 
 class CorrelationPlottingBinned(Callback):
     
@@ -510,7 +522,7 @@ class ScalePlotting(Callback):
         self.dataloader = dataloader
     
     def on_fit_start(self, trainer, pl_module):
-        _raw_batch = next(iter(self.dataloader.load_data_for_logging_during_training(number_of_shoeboxes_to_log=10000)))
+        _raw_batch = next(iter(self.dataloader.load_data_for_logging_during_training(number_of_shoeboxes_to_log=2000)))
         _raw_batch = [_batch_item.to(pl_module.device) for _batch_item in _raw_batch]
         self.fixed_batch = tuple(_raw_batch)
 
@@ -522,16 +534,37 @@ class ScalePlotting(Callback):
     def on_train_epoch_end(self, trainer, pl_module):
         with torch.no_grad():
             try:
-            
-                shoebox_representation, metadata_representation, image_representation = pl_module._batch_to_representations(batch=self.fixed_batch)
+                # Memory optimization: Process in smaller chunks
+                chunk_size = 20  # Process 20 shoeboxes at a time
+                batch_size = self.fixed_batch[0].size(0)
+                
+                all_scale_means = []
+                all_background_means = []
+                
+                for i in range(0, batch_size, chunk_size):
+                    end_idx = min(i + chunk_size, batch_size)
+                    
+                    # Create chunk batch
+                    chunk_batch = tuple(tensor[i:end_idx] for tensor in self.fixed_batch)
+                    
+                    # Process chunk
+                    shoebox_representation, metadata_representation, image_representation, shoebox_profile_representation = pl_module._batch_to_representations(batch=chunk_batch)
 
-
-                scale_per_reflection = pl_module.compute_scale(representations=[image_representation, metadata_representation])
-                print(scale_per_reflection)
-                scale_mean_per_reflection = scale_per_reflection.mean.cpu().detach().numpy()
-                print(len(scale_mean_per_reflection) )               
-                # loc = scale_distribution.loc.cpu().numpy()
-                # scale = scale_distribution.scale.cpu().numpy()
+                    scale_per_reflection = pl_module.compute_scale(representations=[image_representation, metadata_representation])
+                    scale_mean_per_reflection = scale_per_reflection.mean.cpu().detach().numpy()
+                    all_scale_means.append(scale_mean_per_reflection)
+                    
+                    background_mean_per_reflection = pl_module.compute_background_distribution(shoebox_representation=shoebox_representation).mean.cpu().detach().numpy()
+                    all_background_means.append(background_mean_per_reflection)
+                    
+                    # Clear intermediate tensors
+                    del shoebox_representation, metadata_representation, image_representation, scale_per_reflection
+                
+                # Combine results
+                scale_mean_per_reflection = np.concatenate(all_scale_means)
+                background_mean_per_reflection = np.concatenate(all_background_means)
+                
+                print(len(scale_mean_per_reflection))
                 
                 plt.figure(figsize=(8,5))
                 plt.hist(scale_mean_per_reflection, bins=100, edgecolor="black", alpha=0.6, label="Scale_mean")
@@ -543,20 +576,7 @@ class ScalePlotting(Callback):
                 pl_module.logger.experiment.log({"scale_histogram": wandb.Image(plt.gcf())})
                 plt.close()
 
-                # # Plot histogram for scales > 20000
-                # high_scale_values = scale_mean_per_reflection[scale_mean_per_reflection > 20000]
-                # if len(high_scale_values) > 0:
-                #     plt.figure(figsize=(8,5))
-                #     plt.hist(high_scale_values, bins=100, edgecolor="black", alpha=0.6, label="Scale_mean > 20000")
-                #     plt.xlabel("mean scale per reflection (> 20000)")
-                #     plt.ylabel("Number of Observations")
-                #     plt.title("Histogram of Per‐Reflection Scale Factors-Model (> 20000)")
-                #     plt.tight_layout()
-                #     pl_module.logger.experiment.log({"scale_histogram_high": wandb.Image(plt.gcf())})
-                #     plt.close()
-                
-                background_mean_per_reflection = pl_module.compute_background_distribution(shoebox_representation=shoebox_representation).mean.cpu().detach().numpy()
-
+                print("###################### std bkg #########: ",np.std(background_mean_per_reflection))
                 plt.figure(figsize=(8,5))
                 plt.hist(background_mean_per_reflection, bins=100, edgecolor="black", alpha=0.6, label="Background_mean")
                 plt.xlabel("mean background per reflection")
@@ -609,11 +629,6 @@ class ScalePlotting(Callback):
                 axes.set_title(f'Correlation Plot (Log-Log) (r={correlation:.3f}, slope={fitted_slope:.4f})')
                 axes.legend()
                 
-                # Add diagonal line
-                # min_val = min(axes.get_xlim()[0], axes.get_ylim()[0])
-                # max_val = max(axes.get_xlim()[1], axes.get_ylim()[1])
-                # axes.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.5)
-
                 pl_module.logger.experiment.log({
                     "Correlation/Background": wandb.Image(fig),
                     "Correlation/background_correlation_coefficient": correlation,
@@ -625,22 +640,47 @@ class ScalePlotting(Callback):
             except Exception as e:
                 print(f"failed ScalePlotting/Bkg with: {e}")
 
+            # Memory optimization: Clear large tensors and force cleanup
+            del all_scale_means, all_background_means, scale_mean_per_reflection, background_mean_per_reflection
+            torch.cuda.empty_cache()
 
             ################# Plot Intensity Correlation ##############################
-            shoeboxes_batch, photon_rate_output, hkl_batch, counts_batch = pl_module(self.fixed_batch, verbose_output=True)
-            
             try:
-                # Extract values from dictionary
-                samples_scale = photon_rate_output['samples_scale']
-                samples_predicted_structure_factor = photon_rate_output["samples_predicted_structure_factor"]
-
-                model_intensity = samples_scale * torch.square(samples_predicted_structure_factor)
-                model_intensity = torch.mean(model_intensity, dim=1).squeeze() #(batch_size, 1)
-                print("model_intensity", model_intensity.shape)
-
-
+                # Memory optimization: Process intensity correlation in chunks without verbose output
+                all_model_intensities = []
+                
+                for i in range(0, batch_size, chunk_size):
+                    end_idx = min(i + chunk_size, batch_size)
+                    chunk_batch = tuple(tensor[i:end_idx] for tensor in self.fixed_batch)
+                    
+                    # Get representations for this chunk
+                    shoebox_representation, metadata_representation, image_representation,shoebox_profile_representation = pl_module._batch_to_representations(batch=chunk_batch)
+                    
+                    # Compute scale and structure factors for this chunk
+                    scale_distribution = pl_module.compute_scale(representations=[image_representation, metadata_representation])
+                    scale_samples = scale_distribution.rsample([pl_module.model_settings.number_of_mc_samples]).permute(1, 0, 2)
+                    
+                    # Get structure factor samples for this chunk
+                    hkl_chunk = chunk_batch[4]  # hkl batch
+                    samples_surrogate_posterior = pl_module.surrogate_posterior.rsample([pl_module.model_settings.number_of_mc_samples])
+                    rasu_ids = pl_module.surrogate_posterior.rac.rasu_ids[0]
+                    samples_predicted_structure_factor = pl_module.surrogate_posterior.rac.gather(
+                        source=samples_surrogate_posterior.T, rasu_id=rasu_ids, H=hkl_chunk
+                    ).unsqueeze(-1)
+                    
+                    # Compute model intensity for this chunk
+                    model_intensity_chunk = scale_samples * torch.square(samples_predicted_structure_factor)
+                    model_intensity_chunk = torch.mean(model_intensity_chunk, dim=1).squeeze()
+                    all_model_intensities.append(model_intensity_chunk.cpu().detach().numpy())
+                    
+                    # Clear intermediate tensors
+                    del shoebox_representation, metadata_representation, image_representation, scale_distribution, scale_samples
+                    del samples_surrogate_posterior, samples_predicted_structure_factor, model_intensity_chunk
+                
+                # Combine results
+                model_to_plot = np.concatenate(all_model_intensities)
                 reference_to_plot = self.fixed_batch_intensity_sum_values.cpu().detach().numpy()
-                model_to_plot = model_intensity.cpu().detach().numpy()
+                
                 fig, axes = plt.subplots(figsize=(10, 10))
                 scatter = axes.scatter(reference_to_plot, 
                                     model_to_plot, 
@@ -692,67 +732,67 @@ class ScalePlotting(Callback):
                 print(f"failed ScalePlotting/Bkg with {e}")
 
             
-            ################# Plot Count Correlation ##############################
-            try:
-                # Extract values from dictionary
-                samples_photon_rate = photon_rate_output['photon_rate']
+            # ################# Plot Count Correlation ##############################
+            # try:
+            #     # Extract values from dictionary
+            #     samples_photon_rate = photon_rate_output['photon_rate']
 
-                print("samples_photon_rate (batch, mc, pix)", samples_photon_rate.shape)
-                samples_photon_rate = samples_photon_rate.sum(dim=-1)
-                print("samples_photon_rate (batch, mc)", samples_photon_rate.shape)
+            #     print("samples_photon_rate (batch, mc, pix)", samples_photon_rate.shape)
+            #     samples_photon_rate = samples_photon_rate.sum(dim=-1)
+            #     print("samples_photon_rate (batch, mc)", samples_photon_rate.shape)
                 
-                photon_rate_per_sb = torch.mean(samples_photon_rate, dim=1).squeeze() #(batch_size, 1)
-                print("photon_rate (batch)", photon_rate_per_sb.shape)
+            #     photon_rate_per_sb = torch.mean(samples_photon_rate, dim=1).squeeze() #(batch_size, 1)
+            #     print("photon_rate (batch)", photon_rate_per_sb.shape)
 
 
-                reference_to_plot = self.fixed_batch_total_counts.cpu().detach().numpy()
-                model_to_plot = photon_rate_per_sb.cpu().detach().numpy()
-                fig, axes = plt.subplots(figsize=(10, 10))
-                scatter = axes.scatter(reference_to_plot, 
-                                    model_to_plot, 
-                                    marker='x', s=10, alpha=0.5, c="black")
+            #     reference_to_plot = self.fixed_batch_total_counts.cpu().detach().numpy()
+            #     model_to_plot = photon_rate_per_sb.cpu().detach().numpy()
+            #     fig, axes = plt.subplots(figsize=(10, 10))
+            #     scatter = axes.scatter(reference_to_plot, 
+            #                         model_to_plot, 
+            #                         marker='x', s=10, alpha=0.5, c="black")
 
-                try:
-                    fitted_slope = np.polyfit(reference_to_plot, model_to_plot, 1, w=None, cov=False)[0]
-                    print(f"Polyfit successful, slope: {fitted_slope:.6f}")
-                except np.linalg.LinAlgError as e:
-                    print(f"Polyfit failed with LinAlgError: {e}")
-                    print("Falling back to manual calculation")
-                    # Fallback to manual calculation for line through origin
-                    fitted_slope = np.sum(reference_to_plot * model_to_plot) / np.sum(reference_to_plot**2)
-                    print(f"Fallback slope: {fitted_slope:.6f}")
-                except Exception as e:
-                    print(f"Polyfit failed with other error: {e}")
-                    # Fallback to manual calculation
-                    fitted_slope = np.sum(reference_to_plot * model_to_plot) / np.sum(reference_to_plot**2)
-                    print(f"Fallback slope: {fitted_slope:.6f}")
+            #     try:
+            #         fitted_slope = np.polyfit(reference_to_plot, model_to_plot, 1, w=None, cov=False)[0]
+            #         print(f"Polyfit successful, slope: {fitted_slope:.6f}")
+            #     except np.linalg.LinAlgError as e:
+            #         print(f"Polyfit failed with LinAlgError: {e}")
+            #         print("Falling back to manual calculation")
+            #         # Fallback to manual calculation for line through origin
+            #         fitted_slope = np.sum(reference_to_plot * model_to_plot) / np.sum(reference_to_plot**2)
+            #         print(f"Fallback slope: {fitted_slope:.6f}")
+            #     except Exception as e:
+            #         print(f"Polyfit failed with other error: {e}")
+            #         # Fallback to manual calculation
+            #         fitted_slope = np.sum(reference_to_plot * model_to_plot) / np.sum(reference_to_plot**2)
+            #         print(f"Fallback slope: {fitted_slope:.6f}")
                 
-                # Plot the fitted line
-                x_range = np.linspace(reference_to_plot.min(), reference_to_plot.max(), 100)
-                y_fitted = fitted_slope * x_range
-                axes.plot(x_range, y_fitted, 'r-', linewidth=2, label=f'Fitted line: y = {fitted_slope:.4f}x')
+            #     # Plot the fitted line
+            #     x_range = np.linspace(reference_to_plot.min(), reference_to_plot.max(), 100)
+            #     y_fitted = fitted_slope * x_range
+            #     axes.plot(x_range, y_fitted, 'r-', linewidth=2, label=f'Fitted line: y = {fitted_slope:.4f}x')
                 
-                # Set log-log scale
-                axes.set_xscale('log')
-                axes.set_yscale('log')
+            #     # Set log-log scale
+            #     axes.set_xscale('log')
+            #     axes.set_yscale('log')
                 
-                correlation = np.corrcoef(reference_to_plot, 
-                                        model_to_plot*np.max(reference_to_plot)/np.max(model_to_plot))[0,1]
-                axes.set_xlabel('Dials Reference Intensity')
-                axes.set_ylabel('Predicted Intensity')
-                axes.set_title(f'Correlation Plot (Log-Log) (r={correlation:.3f}, slope={fitted_slope:.4f})')
-                axes.legend()
+            #     correlation = np.corrcoef(reference_to_plot, 
+            #                             model_to_plot*np.max(reference_to_plot)/np.max(model_to_plot))[0,1]
+            #     axes.set_xlabel('Dials Reference Intensity')
+            #     axes.set_ylabel('Predicted Intensity')
+            #     axes.set_title(f'Correlation Plot (Log-Log) (r={correlation:.3f}, slope={fitted_slope:.4f})')
+            #     axes.legend()
                 
-                pl_module.logger.experiment.log({
-                    "Correlation/Counts": wandb.Image(fig),
-                    "Correlation/counts_correlation_coefficient": correlation,
-                    "epoch": trainer.current_epoch
-                })
-                plt.close(fig)
-                print("logged image")
+            #     pl_module.logger.experiment.log({
+            #         "Correlation/Counts": wandb.Image(fig),
+            #         "Correlation/counts_correlation_coefficient": correlation,
+            #         "epoch": trainer.current_epoch
+            #     })
+            #     plt.close(fig)
+            #     print("logged image")
 
-            except Exception as e:
-                print(f"failed corr counts with {e}")
+            # except Exception as e:
+            #     print(f"failed corr counts with {e}")
 
             
 
