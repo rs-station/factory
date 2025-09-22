@@ -66,36 +66,34 @@ output {{
 }}
 """
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a Phenix .eff file with dynamic MTZ paths."
     )
     parser.add_argument(
-        "--sf-mtz", required=True,
-        help="Path to the structure-factor MTZ file"
+        "--sf-mtz", required=True, help="Path to the structure-factor MTZ file"
     )
     parser.add_argument(
-        "--rfree-mtz", required=True,
-        help="Path to the R-free flags MTZ file"
+        "--rfree-mtz", required=True, help="Path to the R-free flags MTZ file"
     )
     parser.add_argument(
-        "--out", required=True,
-        help="Output path for the generated .eff file"
+        "--out", required=True, help="Output path for the generated .eff file"
     )
     parser.add_argument(
-        "--phenix-out-mtz", required=True,
-        help="Specific name of the output .mtz file of phenix."
+        "--phenix-out-mtz",
+        required=True,
+        help="Specific name of the output .mtz file of phenix.",
     )
     args = parser.parse_args()
 
     # Fill in the template and write to the output file
     content = EFF_TEMPLATE.format(
-        sf_mtz=args.sf_mtz,
-        rfree_mtz=args.rfree_mtz,
-        phenix_out_mtz=args.phenix_out_mtz
+        sf_mtz=args.sf_mtz, rfree_mtz=args.rfree_mtz, phenix_out_mtz=args.phenix_out_mtz
     )
     Path(args.out).write_text(content)
     print(f"Wrote .eff file to {args.out}")
+
 
 if __name__ == "__main__":
     main()

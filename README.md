@@ -1,6 +1,6 @@
 # Factory
 
-> **⚠️ This project is under active development.**  
+> **⚠️ This project is under active development.**
 
 A Python package for crystallographic data processing and analysis.
 
