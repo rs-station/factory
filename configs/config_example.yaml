@@ -28,12 +28,12 @@ model_settings:
   # scale_distribution: FoldedNormalDistributionLayer
 
   # Encoder
-  metadata_encoder: 
+  metadata_encoder:
     name: BaseMetadataEncoder
     params:
       depth: 10
 
-  shoebox_encoder: 
+  shoebox_encoder:
     name: BaseShoeboxEncoder
     params:
       # in_channels: 1
@@ -72,7 +72,7 @@ model_settings:
     # params:
     #   concentration: 6.68
     #   rate: 0.001
-  
+
   background_prior_distribution:
     # name: TorchHalfNormal
     # params:
@@ -97,7 +97,3 @@ loss_settings:
 
 phenix_settings:
   r_values_reference_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/pdb_model/refine_001.log"
-  
-
-
-
