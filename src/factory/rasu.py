@@ -3,14 +3,13 @@ from typing import Iterator, Optional, Sequence
 import gemmi
 import numpy as np
 import torch
+from abismal_torch.symmetry.op import Op
 from reciprocalspaceship.decorators import cellify, spacegroupify
 from reciprocalspaceship.utils import (
     apply_to_hkl,
     generate_reciprocal_asu,
     generate_reciprocal_cell,
 )
-
-from abismal_torch.symmetry.op import Op
 
 
 class ReciprocalASU(torch.nn.Module):
@@ -22,7 +21,7 @@ class ReciprocalASU(torch.nn.Module):
         spacegroup: gemmi.SpaceGroup,
         dmin: float,
         anomalous: Optional[bool] = True,
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         Base Layer that maps observed reflections to the reciprocal asymmetric unit (rasu).
@@ -152,8 +151,18 @@ class ReciprocalASUCollection(torch.nn.Module):
         for rasu_id, rasu in enumerate(self.reciprocal_asus):
             Hcell = generate_reciprocal_cell(rasu.cell, dmin=rasu.dmin)
             h, k, l = Hcell.T
-            self.reflection_id_grid[torch.tensor(rasu_id, dtype=torch.int),torch.tensor(h, dtype=torch.int), torch.tensor(k, dtype=torch.int), torch.tensor(l, dtype=torch.int)] = (
-                rasu.reflection_id_grid[torch.tensor(h, dtype=torch.int), torch.tensor(k, dtype=torch.int), torch.tensor(l, dtype=torch.int)] + offset
+            self.reflection_id_grid[
+                torch.tensor(rasu_id, dtype=torch.int),
+                torch.tensor(h, dtype=torch.int),
+                torch.tensor(k, dtype=torch.int),
+                torch.tensor(l, dtype=torch.int),
+            ] = (
+                rasu.reflection_id_grid[
+                    torch.tensor(h, dtype=torch.int),
+                    torch.tensor(k, dtype=torch.int),
+                    torch.tensor(l, dtype=torch.int),
+                ]
+                + offset
             )
             # self.reflection_id_grid[rasu_id, h, k, l] = (
             #     rasu.reflection_id_grid[h,k,l] + offset
@@ -195,7 +204,7 @@ class ReciprocalASUGraph(ReciprocalASUCollection):
         *rasus: ReciprocalASU,
         parents: Optional[torch.Tensor] = None,
         reindexing_ops: Optional[Sequence[str]] = None,
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         A graph of rasu objects.
