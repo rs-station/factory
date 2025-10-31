@@ -1,10 +1,12 @@
+
+import sys, os
+
 repo_root = os.path.abspath(os.path.join(__file__, os.pardir))
 inner_pkg = os.path.join(repo_root, "abismal_torch")  
 
 sys.path.insert(0, inner_pkg)
 sys.path.insert(0, repo_root)
 
-import sys, os
 import cProfile
 
 import pandas as pd
@@ -71,9 +73,6 @@ import torch
 class Model(L.LightningModule):
 
     automatic_optimization = True
-    # shoebox_encoder: shoebox_encoder.ShoeboxEncoder #encoder.CNN_3d
-    # metadata_encoder: metadata_encoder.MetadataEncoder #encoder.MLPMetadataEncoder
-    # scale_function: MLPScale
     profile_distribution: distributions.LRMVN_Distribution
     background_distribution: distributions.HalfNormalDistribution
     surrogate_posterior: FoldedNormalPosterior
@@ -138,26 +137,12 @@ class Model(L.LightningModule):
         if hasattr(self, 'scale_function'):
             self.scale_function.to(self.device)
         
-        # Ensure dataloader is configured for the current device
         if hasattr(self, 'dataloader') and self.dataloader is not None:
             if hasattr(self.dataloader, 'pin_memory'):
                 self.dataloader.pin_memory = True
 
         return self
 
-    # def transfer_batch_to_device(self, batch, device, dataloader_idx=0):
-    #     """Override to ensure all tensors in batch are moved to the correct device."""
-    #     def _to_device(obj):
-    #         if isinstance(obj, torch.Tensor):
-    #             return obj.to(device)
-    #         elif isinstance(obj, (list, tuple)):
-    #             return type(obj)(_to_device(item) for item in obj)
-    #         elif isinstance(obj, dict):
-    #             return {key: _to_device(value) for key, value in obj.items()}
-    #         else:
-    #             return obj
-        
-    #     return _to_device(batch)
 
     @staticmethod
     def move_settings(settings: dataclasses.dataclass, device: torch.device):
@@ -182,23 +167,6 @@ class Model(L.LightningModule):
                 moved[field.name] = val
         return dataclasses.replace(settings, **moved)
 
-    # def set_dataloader(self, dataloader):
-    #     self.dataloader = dataloader
-        
-    #     # Ensure dataloader is configured for GPU acceleration
-    #     if hasattr(self.dataloader, 'pin_memory'):
-    #         self.dataloader.pin_memory = True
-        
-    #     # If we have a device property, ensure proper configuration
-    #     if hasattr(self, 'device'):
-    #         # Configure for the current device
-    #         if hasattr(self.dataloader, 'pin_memory'):
-    #             self.dataloader.pin_memory = True
-    #         if hasattr(self.dataloader, 'num_workers'):
-    #             # Use multiple workers for faster data loading
-    #             self.dataloader.num_workers = min(4, self.dataloader.num_workers if hasattr(self.dataloader, 'num_workers') else 0)
-        
-    #     return self
 
     def initialize_surrogate_posterior(self):
         initial_mean = self.model_settings.intensity_prior_distibution.distribution().mean() # self.model_settings.intensity_distribution_initial_location
@@ -209,11 +177,11 @@ class Model(L.LightningModule):
             rac=self.model_settings.rac, loc=initial_mean, scale=initial_scale # epsilon=settings.epsilon
         )
 
-        # def check_grad_hook(grad):
-        #     if grad is not None:
-        #         print(f"Gradient stats: min={grad.min()}, max={grad.max()}, mean={grad.mean()}, any_nan={torch.isnan(grad).any()}, all_finite={torch.isfinite(grad).all()}")
-        #     return grad
-        # surrogate_posterior.distribution.loc.register_hook(check_grad_hook)
+        def check_grad_hook(grad):
+            if grad is not None:
+                print(f"Gradient stats: min={grad.min()}, max={grad.max()}, mean={grad.mean()}, any_nan={torch.isnan(grad).any()}, all_finite={torch.isfinite(grad).all()}")
+            return grad
+        surrogate_posterior.distribution.loc.register_hook(check_grad_hook)
 
         return surrogate_posterior
    
@@ -278,26 +246,6 @@ class Model(L.LightningModule):
         if hasattr(self, 'logger') and self.logger is not None:
             self.logger.experiment.log(stats)
 
-    def get_surrogate_distribution(self, metadata):
-        print("get_surrogate_distribution")
-
-        if self.model_settings.use_surrogate_parameters:
-            print("entered if")
-            # params = [self.surrogate_posterior_parameters[metadata[b,-1].to(torch.int)] for b in range(len(metadat))]
-
-            # idx = metadata[:, -1].long().tolist()
-            # params = torch.stack([self.surrogate_posterior_parameters[i] for i in idx], dim=0)
-            # return rsm.FoldedNormal(params[:,0], params[:,1])
-
-            idx = metadata[:, -1].long()   # HKL ids
-            print("idx", len(idx), idx[:10])
-            params = self.surrogate_embed(idx)   # [B, 2]
-            loc, raw_scale = params[:, 0], params[:, 1]
-            scale = raw_scale.abs().clamp_min(1e-8)  # keep valid
-            print("access param embedding", len(scale), len(loc))
-            dist = rsm.FoldedNormal(loc, scale)
-            
-            return dist
 
     def _batch_to_representations(self, batch: tuple):
         shoeboxes_batch, metadata_batch, dead_pixel_mask_batch, counts_batch, hkl_batch, processed_metadata_batch = batch
