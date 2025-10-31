@@ -1,20 +1,19 @@
-import sys, os
-import cProfile
-
-import pandas as pd
-# only needed for my local run
 repo_root = os.path.abspath(os.path.join(__file__, os.pardir))
 inner_pkg = os.path.join(repo_root, "abismal_torch")  
 
 sys.path.insert(0, inner_pkg)
 sys.path.insert(0, repo_root)
 
+import sys, os
+import cProfile
+
+import pandas as pd
+
 import data_loader
 import torch
 import numpy as np
 import lightning as L
 import dataclasses
-# import encoder
 import metadata_encoder
 import shoebox_encoder
 import torch.nn.functional as F
@@ -65,11 +64,6 @@ import wandb
 torch.set_float32_matmul_precision("medium")
 
 
-# import integrator
-# from integrator import data_loaders
-# from integrator.model.encoders import cnn_3d, fc_encoder
-
-
 import torch
  
 
@@ -87,16 +81,14 @@ class Model(L.LightningModule):
     def __init__(self, model_settings: ModelSettings, loss_settings: LossSettings):
         super().__init__()
         self.model_settings = model_settings
-        self.shoebox_encoder = model_settings.shoebox_encoder #encoder.CNN_3d()
+        self.profile_encoder = model_settings.profile_encoder #encoder.CNN_3d()
         self.metadata_encoder = model_settings.metadata_encoder
         self.intensity_encoder = model_settings.intensity_encoder
         self.scale_function = self.model_settings.scale_function
-        self.distribution_for_shoebox_profile = self.model_settings.build_shoebox_profile_distribution(torch.load(os.path.join(self.model_settings.data_directory, "concentration.pt"), weights_only=True), dmodel=self.model_settings.dmodel)
-        # self.distribution_for_shoebox_profile = self.model_settings.build_shoebox_profile_distribution(dmodel=self.model_settings.dmodel)
+        self.profile_distribution = self.model_settings.build_shoebox_profile_distribution(torch.load(os.path.join(self.model_settings.data_directory, "concentration.pt"), weights_only=True), dmodel=self.model_settings.dmodel)
         self.background_distribution = self.model_settings.build_background_distribution(dmodel=self.model_settings.dmodel)
         self.surrogate_posterior = self.initialize_surrogate_posterior()
-        self.disp_param = torch.tensor(loss_settings.dispersion_parameter) #torch.nn.Parameter(torch.tensor(0.001))torch.nn.Parameter(torch.tensor(0.001)) #torch.tensor(loss_settings.dispersion_parameter) #torch.nn.Parameter(torch.tensor(0.001))
-        # self.disp_param.register_hook(lambda g: 0.1 * g)
+        self.dispersion_param = torch.tensor(loss_settings.dispersion_parameter) #torch.nn.Parameter(torch.tensor(0.001))torch.nn.Parameter(torch.tensor(0.001)) #torch.tensor(loss_settings.dispersion_parameter) #torch.nn.Parameter(torch.tensor(0.001))
         self.loss_settings = loss_settings
         self.loss_function = loss_functionality.LossFunction()
         self.loss = torch.Tensor(0)
@@ -137,8 +129,8 @@ class Model(L.LightningModule):
         if hasattr(self, 'surrogate_posterior'):
             self.surrogate_posterior.to(self.device)
             
-        if hasattr(self, 'distribution_for_shoebox_profile'):
-            self.distribution_for_shoebox_profile.to(self.device)
+        if hasattr(self, 'profile_distribution'):
+            self.profile_distribution.to(self.device)
             
         if hasattr(self, 'background_distribution'):
             self.background_distribution.to(self.device)
@@ -234,7 +226,7 @@ class Model(L.LightningModule):
         return representation1 + representation2
     
     def compute_shoebox_profile(self, representations: list[torch.Tensor]):
-        return self.distribution_for_shoebox_profile.compute_profile(*representations)
+        return self.profile_distribution.compute_profile(*representations)
 
     def compute_background_distribution(self, shoebox_representation):
         return self.background_distribution(shoebox_representation)
@@ -312,15 +304,15 @@ class Model(L.LightningModule):
         standardized_counts = shoeboxes_batch #[:,:,-1].reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21)
         print("sb shape", standardized_counts.shape)
 
-        shoebox_profile_representation = self.shoebox_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
+        shoebox_profile_representation = self.profile_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
 
-        shoebox_representation = self.intensity_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
+        shoebox_intensity_representation = self.intensity_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
 
 
         metadata_representation = self.metadata_encoder(self._cut_metadata(processed_metadata_batch).float()) # (batch_size, dmodel)
         print("metadata representation (batch size, dmodel)", metadata_representation.shape)
 
-        joined_shoebox_representation = shoebox_representation + metadata_representation 
+        joined_shoebox_representation = shoebox_intensity_representation + metadata_representation 
         # joined_shoebox_representation = shoebox_profile_representation
         
         pooled_image_representation = torch.max(joined_shoebox_representation, dim=0, keepdim=True)[0] # (1, dmodel)
@@ -365,103 +357,39 @@ class Model(L.LightningModule):
             )
             if verbose_output:
                 return (shoeboxes_batch, photon_rate, hkl_batch, counts_batch)
-
             return (counts_batch, dead_pixel_mask_batch, hkl_batch, photon_rate, background_distribution, scale_distribution, self.surrogate_posterior, 
-                    self.distribution_for_shoebox_profile)
+                    self.profile_distribution)
         except Exception as e:
             print(f"failed in forward: {e}")
             for param in self.parameters():
                 param.grad = None
             raise
 
-    def _check_surrogate(self, batch):
-        
-        opt = self.optimizers()
-
-        # i=9
-        a=100
-        for run in range(2):
-            a *= (run+1)
-
-
-
-        #     hkl = torch.tensor([i,0,0])
-        #     i=5+2
-        #     samples = self.surrogate_posterior.rsample([10])
-        #     print("samples", samples)
-        #     gathered_samples = self.surrogate_posterior.rac.gather(source=samples.T,rasu_id=torch.tensor([0]), H=hkl)
-        #     print("gathered samples:", gathered_samples)
-
-            output = self(batch=batch)
-            dist = output[6]
-
-            samples = dist.rac.gather(dist.rsample([3]).T, rasu_id=torch.tensor([0]), H=output[2])
-
-            loss= self.loss_function(*output, self.model_settings, self.loss_settings, self.disp_param).loss
-
-            param = list(self.surrogate_posterior.parameters())[0]
-
-            param_before = param.clone()
-            if param in opt.state and 'exp_avg' in opt.state[param]:
-                momentum_before = opt.state[param]['exp_avg'].clone()
-
-            opt.zero_grad()
-            loss.backward()
-
-            opt.step()
-
-            self.loss = loss
-
-            try:
-                param_changed_mask = param != param_before
-                momentum_changed_mask = opt.state[param]['exp_avg'] != momentum_before
-                print("param_changed_mask", param_changed_mask.shape, param_changed_mask.sum())
-                print("param.grad", param.grad.shape, (param.grad!=0).sum())
-                print("momentum.grad", momentum_changed_mask.shape, momentum_changed_mask.sum())
-                print(f"Params changed where grad != 0: {torch.allclose(param_changed_mask, param.grad != 0)}")
-                print(f"Momentum changed where grad != 0: {torch.allclose(momentum_changed_mask, param.grad != 0)}")
-            except Exception as e:
-                print("skip", e)
-
-        # sys.exit("Stopping here.")
-        print("##################### next batch")
-
     def training_step_(self, batch):
         opt_main, opt_loc = self.optimizers()
-
         self.eval()
         self.surrogate_posterior.train()
-
         for n, p in self.named_parameters():
             if not n.startswith("surrogate_posterior."):
                 p.requires_grad_(False)
-
-        
         local_runs = 3 if (self.current_epoch < 0.3*self.trainer.max_epochs) else 1
         for _ in range(local_runs):
-
             output = self(batch=batch)
-            local_loss = self.loss_function(*output, self.model_settings, self.loss_settings, self.disp_param).loss
+            local_loss = self.loss_function(*output, self.model_settings, self.loss_settings, self.dispersion_param).loss
             opt_loc.zero_grad(set_to_none=True)
             self.manual_backward(local_loss)      # builds sparse grads on rows in idx
             opt_loc.step()
-
         self.train()
-
         for n, p in self.named_parameters():
             if not n.startswith("surrogate_posterior."):
                 p.requires_grad_(True)
-
         output = self(batch=batch)
-        loss_output = self.loss_function(*output, self.model_settings, self.loss_settings, self.disp_param)
+        loss_output = self.loss_function(*output, self.model_settings, self.loss_settings, self.dispersion_param)
         opt_main.zero_grad()
         loss = loss_output.loss
         loss.backward()
         opt_main.step()
-
         self.loss = loss.detach()
-
-
         self.logger.experiment.log({
                 "loss/kl_structure_factors_step": loss_output.kl_structure_factors.item(),
                 "loss/kl_background": loss_output.kl_background.item(),
@@ -469,53 +397,21 @@ class Model(L.LightningModule):
                 "loss/kl_scale": loss_output.kl_scale.item(),
                 "loss/log_likelihood": loss_output.log_likelihood.item(),
             })
-        self.log("disp_param", self.disp_param, on_step=True, on_epoch=True)
-        self.log("loss/kl_structure_factors", loss_output.kl_structure_factors.item(),on_epoch=True)
-
-        
+        self.log("disp_param", self.dispersion_param, on_step=True, on_epoch=True)
+        self.log("loss/kl_structure_factors", loss_output.kl_structure_factors.item(),on_epoch=True)    
         self.loss = loss
         print("log loss step")
         self.log("train/loss_step", self.loss, on_step=True, on_epoch=True)
         norms = grad_norm(self, norm_type=2)
         for name, norm in norms.items():
             self.log(f"grad_norm/{name}", norm)
-
-
         return self.loss
     
     
     def training_step(self, batch):
-        # opt_main = self.optimizers()
         output = self(batch=batch)
-
-        loss_output = self.loss_function(*output, self.model_settings, self.loss_settings, self.disp_param, self.current_epoch)
-
-        # param = list(self.surrogate_posterior.parameters())[0]
-
-        # param_before = param.clone()
-        # if param in opt_main.state and 'exp_avg' in opt_main.state[param]:
-        #     momentum_before = opt_main.state[param]['exp_avg'].clone()
-
-        # opt_main.zero_grad()
-
-        # loss_output.loss.backward()
-
-        # opt_main.step()
-
+        loss_output = self.loss_function(*output, self.model_settings, self.loss_settings, self.dispersion_param, self.current_epoch)
         self.loss = loss_output.loss.detach()
-
-        # try:
-        #     param_changed_mask = param != param_before
-        #     # momentum_changed_mask = opt_sur.state[param]['exp_avg'] != momentum_before
-        #     print("param_changed_mask", param_changed_mask.shape, param_changed_mask.sum())
-        #     # print("param.grad", param.grad.shape, (param.grad!=0).sum())
-        #     # print("momentum.grad", momentum_changed_mask.shape, momentum_changed_mask.sum())
-        #     print(f"Params changed where grad != 0: {torch.allclose(param_changed_mask, param.grad != 0)}")
-        #     # print(f"Momentum changed where grad != 0: {torch.allclose(momentum_changed_mask, param.grad != 0)}")
-        # except Exception as e:
-        #     print("skip", e)
-
-
         self.logger.experiment.log({
                 "loss/kl_structure_factors": loss_output.kl_structure_factors.item(),
                 "loss/kl_background": loss_output.kl_background.item(),
@@ -523,26 +419,19 @@ class Model(L.LightningModule):
                 "loss/kl_scale": loss_output.kl_scale.item(),
                 "loss/log_likelihood": loss_output.log_likelihood.item(),
             })
-
         self.log("loss/kl_structure_factors", loss_output.kl_structure_factors.item(),on_epoch=True)
-
-
-    
-    
         self.loss = loss_output.loss
-        print("log loss step")
         self.log("train/loss_step", self.loss, on_step=True, on_epoch=True)
         norms = grad_norm(self, norm_type=2)
         for name, norm in norms.items():
             self.log(f"grad_norm/{name}", norm)
-
         return self.loss
 
     
     def validation_step(self, batch, batch_idx): 
         print(f"Validation step called for batch {batch_idx}")
         output = self(batch=batch)
-        loss_output = self.loss_function(*output, self.model_settings, self.loss_settings, self.disp_param, self.current_epoch)
+        loss_output = self.loss_function(*output, self.model_settings, self.loss_settings, self.dispersion_param, self.current_epoch)
 
         self.log("validation_loss/kl_structure_factors", loss_output.kl_structure_factors.item(), on_step=False, on_epoch=True)
         self.log("validation_loss/kl_background", loss_output.kl_background.item(), on_step=False, on_epoch=True)
@@ -556,11 +445,8 @@ class Model(L.LightningModule):
 
 
     def surrogate_full_sweep(self, dataloader=None, K=1):
-        # use the train loader unless you pass a special fast one (e.g., big batches, no shuffle)
         dl = self.dataloader
         opt_main, opt_loc = self.optimizers()
-
-        # Freeze mains so no grads/BN/Dropout changes (eval avoids BN stat drift)
         for n, p in self.named_parameters():
             if not n.startswith("surrogate_posterior."):
                 p.requires_grad_(False)
@@ -568,18 +454,15 @@ class Model(L.LightningModule):
         self.surrogate_posterior.train()
 
         for xb in dl:
-            # Ensure batch is on the correct device
             xb = self.transfer_batch_to_device(xb, self.device)
             
-            # Your model already uses the current locals inside `forward(self, batch)`
-            for _ in range(K):                      # usually K=1 here
+            for _ in range(K):                      
                 out = self(batch=xb)
-                loss_obj = self.loss_function(*out, self.model_settings, self.loss_settings, self.disp_param)
+                loss_obj = self.loss_function(*out, self.model_settings, self.loss_settings, self.dispersion_param)
                 opt_loc.zero_grad(set_to_none=True)
-                self.manual_backward(loss_obj.loss) # grads flow only to locals
+                self.manual_backward(loss_obj.loss)
                 opt_loc.step()
 
-        # Unfreeze + restore train/eval state
         self.train()  
         for n, p in self.named_parameters():
             if not n.startswith("surrogate_posterior."):
@@ -590,9 +473,8 @@ class Model(L.LightningModule):
 
     def on_train_epoch_end(self):
         super().on_train_epoch_end()
-        sched = self.lr_schedulers()            # or self.lr_schedulers()[0] if multiple
+        sched = self.lr_schedulers()
 
-            # get the monitored metric from callback_metrics
         # metric_value = self.trainer.callback_metrics.get("loss/structure_factor_amplitude", None)
 
         # # if metric_value is not None:
@@ -681,57 +563,14 @@ class Model(L.LightningModule):
         # opt, mode="min", factor=0.1, patience=2, threshold=5e0,
         # cooldown=1, min_lr=1e-5,
         # )
-        return [opt], [{"scheduler": sch, "interval": "epoch", "monitor": "loss/kl_structure_factors"}]
+        # return [opt], [{"scheduler": sch, "interval": "epoch", "monitor": "loss/kl_structure_factors"}]
 
         return [opt], [{"scheduler": sch, "interval": "epoch"}]
-
-        # all_surrogate = list(self.surrogate_posterior.parameters())
-        # other_params          = []
-        # surrogate_dense       = []
-        # surrogate_sparse      = []
-
-        # for module in self.surrogate_posterior.modules():
-        #     if isinstance(module, torch.nn.Embedding) and module.sparse:
-        #         # embedding.weight will get sparse gradients
-        #         surrogate_sparse.append(module.weight)
-        
-        # surrogate_sparse_ids = {id(p) for p in surrogate_sparse}
-        # for p in all_surrogate:
-        #     if id(p) in surrogate_sparse_ids:
-        #         continue
-        #     surrogate_dense.append(p)
-
-        # surrogate_ids = {id(p) for p in all_surrogate}
-        # for p in self.parameters():
-        #     if id(p) not in surrogate_ids:
-        #         other_params.append(p)
-
-        # opt_dense_main = torch.optim.Adam(
-        #     other_params,
-        #     lr    = self.model_settings.learning_rate,
-        #     betas = self.model_settings.optimizer_betas,
-        #     weight_decay = self.model_settings.weight_decay,  # Add weight decay
-        # )
-        # if len(surrogate_dense)>0:
-        #     opt_dense_sur  = torch.optim.Adam(
-        #         surrogate_dense,
-        #         lr    = self.model_settings.surrogate_posterior_learning_rate,
-        #         betas = self.model_settings.surrogate_posterior_optimizer_betas,
-        #         weight_decay = self.model_settings.surrogate_weight_decay,  # Add weight decay for surrogate
-        #     )
-        #     return [opt_dense_main, opt_dense_sur]
-        # if len(surrogate_sparse)>0:
-        #     opt_sparse_sur = torch.optim.SparseAdam(
-        #         surrogate_sparse,
-        #         lr = self.model_settings.surrogate_posterior_learning_rate,
-        #     )
-
-        #     return [opt_dense_main, opt_sparse_sur]
     
-    # def val_dataloader(self):
-    #     return self.dataloader.load_data_set_batched_by_image(
-    #     data_set_to_load=self.dataloader.validation_data_set,
-    #     )
+    def val_dataloader(self):
+        return self.dataloader.load_data_set_batched_by_image(
+        data_set_to_load=self.dataloader.validation_data_set,
+        )
 
 
     def inference_to_intensities(self, dataloader, wandb_dir, output_path="predicted_intensities.mtz"):
@@ -796,38 +635,25 @@ class Model(L.LightningModule):
         ds["L"] = ds["L"].astype(int)
         ds = ds.set_index(["H", "K", "L"])
 
-
-
-        # Set proper column labels and MTZ types
         ds["I"] = ds["I_mean"].astype(float)
         ds["SIGI"] = ds["I_sigma"].astype(float)
         # ds.assign_dtypes({"I": "J", "SIGI": "Q"})
 
-        # ✅ Robust dtype assignment across RS versions
         if hasattr(ds, "assign_dtypes"):
             ds = ds.assign_dtypes({"I": "J", "SIGI": "Q"})
         elif hasattr(ds, "set_dtypes"):
             ds = ds.set_dtypes({"I": "J", "SIGI": "Q"})
         else:
-            # fallback: patch internal _mtz_dtypes dict (works in all)
             ds._mtz_dtypes = {"I": "J", "SIGI": "Q"}
         
         ds.cell = gemmi.UnitCell(79.1, 79.1, 38.4, 90, 90, 90)
         ds.spacegroup = gemmi.SpaceGroup("P43212")
 
-        # Save as MTZ
         output_path = f"{wandb_dir}/{output_path}"
         ds.write_mtz(output_path, include_scale=True)
-        print(f"✅ Inference MTZ saved to {output_path}")
+        print(f"Inference MTZ saved to {output_path}")
 
         return mtz_path
-
-
-class DebugStepLR(torch.optim.lr_scheduler.StepLR):
-    def step(self, epoch=None):
-        lrs = [pg['lr'] for pg in self.optimizer.param_groups]
-        print(f"[DEBUG] Scheduler stepped (epoch={epoch}), current lrs: {lrs}")
-        return super().step(epoch)
 
 def compute_I_mean_sigma(F_loc, F_scale, S=1.0):
         """
@@ -835,9 +661,7 @@ def compute_I_mean_sigma(F_loc, F_scale, S=1.0):
         S: deterministic scale factor
         Returns: I_mean, I_sigma
         """
-        # Intensity mean
         I_mean = S * (F_loc**2 + F_scale**2)
-        # Intensity variance
         Var_F2 = 2*F_scale**4 + 4*F_scale**2 * F_loc**2
         I_sigma = S * torch.sqrt(Var_F2)
         return I_mean, I_sigma
