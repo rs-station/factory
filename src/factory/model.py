@@ -196,7 +196,7 @@ class Model(L.LightningModule):
     def compute_shoebox_profile(self, representations: list[torch.Tensor]):
         return self.profile_distribution.compute_profile(*representations)
 
-    def compute_background_distribution(self, shoebox_representation):
+    def compute_background_distribution(self, profile_representation):
         return self.background_distribution(shoebox_representation)
 
     def compute_photon_rate(self, scale_distribution, background_distribution, profile, surrogate_posterior, ordered_miller_indices, metadata, verbose_output) -> torch.Tensor: 
@@ -252,15 +252,15 @@ class Model(L.LightningModule):
         standardized_counts = shoeboxes_batch #[:,:,-1].reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21)
         print("sb shape", standardized_counts.shape)
 
-        shoebox_profile_representation = self.profile_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
+        profile_representation = self.profile_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
 
-        shoebox_intensity_representation = self.intensity_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
+        intensity_representation = self.intensity_encoder(standardized_counts.reshape(shoeboxes_batch.shape[0], 1, 3, 21, 21), mask=dead_pixel_mask_batch)
 
 
         metadata_representation = self.metadata_encoder(self._cut_metadata(processed_metadata_batch).float()) # (batch_size, dmodel)
         print("metadata representation (batch size, dmodel)", metadata_representation.shape)
 
-        joined_shoebox_representation = shoebox_intensity_representation + metadata_representation 
+        joined_shoebox_representation = intensity_representation# + metadata_representation 
         # joined_shoebox_representation = shoebox_profile_representation
         
         pooled_image_representation = torch.max(joined_shoebox_representation, dim=0, keepdim=True)[0] # (1, dmodel)
@@ -269,15 +269,15 @@ class Model(L.LightningModule):
 
         if torch.isnan(metadata_representation).any():
             raise ValueError("MLP metadata_representation produced NaNs!")
-        if torch.isnan(shoebox_representation).any():
+        if torch.isnan(profile_representation).any():
             raise ValueError("MLP shoebox_representation produced NaNs!")
         
-        return shoebox_representation, metadata_representation, image_representation, shoebox_profile_representation
+        return intensity_representation, metadata_representation, image_representation, profile_representation
     
     def forward(self, batch, verbose_output=False):
 
         try:
-            shoebox_representation, metadata_representation, image_representation, shoebox_profile_representation = self._batch_to_representations(batch=batch)
+            intensity_representation, metadata_representation, image_representation, profile_representation = self._batch_to_representations(batch=batch)
             self._log_representation_stats(shoebox_representation, "sb_rep")
             self._log_representation_stats(metadata_representation, "metadata_rep")
             self._log_representation_stats(image_representation, "image_rep")
@@ -288,9 +288,9 @@ class Model(L.LightningModule):
 
             scale_distribution = self.compute_scale(representations=[metadata_representation, image_representation])#[image_representation, metadata_representation]) #  torch.distributions.Normal instance
             print("compute profile")
-            shoebox_profile = self.compute_shoebox_profile(representations=[shoebox_profile_representation])#, image_representation])
+            shoebox_profile = self.compute_shoebox_profile(representations=[profile_representation])#, image_representation])
             print("compute bg")
-            background_distribution = self.compute_background_distribution(shoebox_representation=shoebox_representation)# shoebox_representation)#+image_representation)
+            background_distribution = self.compute_background_distribution(shoebox_representation=intensity_representation)# shoebox_representation)#+image_representation)
             self.surrogate_posterior.update_observed(rasu_id=self.surrogate_posterior.rac.rasu_ids[0], H=hkl_batch)
 
             print("compute rate")
@@ -531,7 +531,7 @@ class Model(L.LightningModule):
 
 
             # Compute representations
-            shoebox_representation, metadata_representation, image_representation, shoebox_profile_representation = self._batch_to_representations(batch=batch)
+            profile_representation, metadata_representation, image_representation, shoebox_profile_representation = self._batch_to_representations(batch=batch)
 
             # Get scale and structure factor distributions
             scale_distribution = self.compute_scale([metadata_representation, image_representation])
