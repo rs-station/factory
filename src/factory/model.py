@@ -260,10 +260,10 @@ class Model(L.LightningModule):
         metadata_representation = self.metadata_encoder(self._cut_metadata(processed_metadata_batch).float()) # (batch_size, dmodel)
         print("metadata representation (batch size, dmodel)", metadata_representation.shape)
 
-        joined_shoebox_representation = intensity_representation + metadata_representation 
+        joined_shoebox_representation = profile_representation + metadata_representation 
         
         pooled_image_representation = torch.max(joined_shoebox_representation, dim=0, keepdim=True)[0] # (1, dmodel)
-        image_representation = pooled_image_representation + metadata_representation
+        image_representation = pooled_image_representation# + metadata_representation
         print("image rep (1, dmodel)", image_representation.shape)
 
         if torch.isnan(metadata_representation).any():
