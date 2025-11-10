@@ -1,5 +1,4 @@
 import sys
-import sys
 
 sys.stderr.write(
     """

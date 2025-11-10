@@ -1,8 +1,10 @@
-import torch
 import math
+
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear
+
 
 class ShoeboxEncoder(nn.Module):
     def __init__(
@@ -64,6 +66,7 @@ class ShoeboxEncoder(nn.Module):
         x = x.view(x.size(0), -1)
         return F.relu(self.fc(x))
 
+
 def weight_initializer(weight):
     fan_avg = 0.5 * (weight.shape[-1] + weight.shape[-2])
     std = math.sqrt(1.0 / fan_avg / 10.0)
@@ -116,6 +119,7 @@ class ResidualLayer(nn.Module):
         out = self.relu(out)
 
         return out
+
 
 class MLPMetadataEncoder(nn.Module):
     def __init__(self, feature_dim, depth=8, dropout=0.0, output_dims=None):
