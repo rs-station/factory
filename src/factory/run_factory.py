@@ -29,7 +29,7 @@ def run(config_path, save_directory,  run_from_version=False):
     
 
     if run_from_version:
-        run_name = f"{now_str}_2025-10-30_16-44-36_from-start"
+        run_name = f"{now_str}_2025-11-05_13-59-42_from-start"
         wandb_logger = WandbLogger(project="full-model", name=run_name, save_dir="/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/lightning_logs")
         wandb.init(
             project="full-model",
@@ -54,7 +54,7 @@ def run(config_path, save_directory,  run_from_version=False):
 
         # ckpt_files = [f for f in os.listdir(artifact_dir) if f.endswith(".ckpt")]
         # checkpoint_path = os.path.join(artifact_dir, ckpt_files[-1])
-        checkpoint_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/lightning_logs/wandb/run-20251030_164436-pmjqmlw8/files/checkpoints/last.ckpt"
+        checkpoint_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/lightning_logs/wandb/run-20251106_125602-hgjymq80/files/checkpoints/last.ckpt"
 
         model = Model.load_from_checkpoint(checkpoint_path, model_settings=model_settings, loss_settings=loss_settings)
 
@@ -109,8 +109,8 @@ def run(config_path, save_directory,  run_from_version=False):
     checkpoint_callback = ModelCheckpoint(
         dirpath=wandb_logger.experiment.dir + "/checkpoints",
         # monitor="validation_loss/loss",
-        save_top_k=-1,
-        every_n_epochs=10,
+        # save_top_k=6,
+        every_n_epochs=15,
         # mode="min",
         filename="{epoch:02d}",#-{step}-{validation_loss/loss:.2f}",
         save_weights_only=True,
@@ -120,16 +120,16 @@ def run(config_path, save_directory,  run_from_version=False):
 
     trainer = L.pytorch.Trainer(
         logger=wandb_logger, 
-        max_epochs=130,
-        log_every_n_steps=80, 
-        val_check_interval=80, 
+        max_epochs=160,
+        log_every_n_steps=200, 
+        val_check_interval=200, 
         # limit_val_batches=21,
         accelerator="auto", 
         enable_checkpointing=True, #model_settings.enable_checkpointing, 
         # default_root_dir="/tmp",
         # profiler="simple",
         # profiler=AdvancedProfiler(dirpath=wandb_logger.experiment.dir, filename="profiler.txt"),
-        # limit_train_batches=1,
+        # limit_train_batches=100,
         callbacks=[
             Plotting(dataloader=dataloader),
             LossLogging(),

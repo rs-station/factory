@@ -1,6 +1,6 @@
 model_settings:
 
-  # run_from_version: 44
+  # run_from_version: 109
 
   # External references
   lysozyme_sequence_file_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/factory/data/lysozyme.seq"
@@ -8,32 +8,51 @@ model_settings:
   unmerged_mtz_file_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/unmerged.mtz"
   protein_pdb_url: "https://files.rcsb.org/download/9B7C.cif"
 
+  use_surrogate_parameters: false
+  select_surrogate_distr: false
+
   # Model & training config
   dmodel: 32
   number_of_mc_samples: 20
+
+  # Optimizer configuration
+  optimizer_name: "AdaBelief"  # Options: "AdaBelief", "AdamW", "Adam", "SGD"
   learning_rate: 0.001
-  surrogate_posterior_learning_rate: 0.001
-
   optimizer_betas: [0.9, 0.999]
+  weight_decay: 0.000
+  optimizer_eps: 1e-16
+  weight_decouple: true
+  
+  # Scheduler configuration
+  # scheduler_step: 55
+  scheduler_gamma: 0.1
+  milestones: [135]
 
-  build_background_distribution: HalfNormalDistribution
+  # surrogate_posterior_learning_rate: 0.001
+  # surrogate_posterior_optimizer_betas: [0.9, 0.9]
+
+  build_background_distribution: FoldedNormalDistribution #FoldedNormalDistribution
   build_shoebox_profile_distribution: DirichletProfile #LRMVN_Distribution #DirichletProfile
   build_intensity_prior_distribution: WilsonPrior
 
-  use_surrogate_parameters: False
 
   # scale_prior_distribution: LogNormal
   # scale_prior_mean: 2.0
   # scale_prior_variance: 6241.0
   # scale_distribution: FoldedNormalDistributionLayer
 
-  # Encoder
   metadata_encoder: 
     name: BaseMetadataEncoder
     params:
       depth: 10
 
-  shoebox_encoder: 
+  # metadata_encoder: 
+  #   name: SimpleMetadataEncoder
+  #   params:
+  #     hidden_dim: 256
+  #     depth: 5
+
+  profile_encoder: 
     name: BaseShoeboxEncoder
     params:
       # in_channels: 1
@@ -56,7 +75,7 @@ model_settings:
   scale_function:
     name: MLPScale
     params:
-      scale_distribution: DeltaDistributionLayer # SoftplusNormalDistributionLayer
+      scale_distribution: DeltaDistributionLayer #DeltaDistributionLayer #LogNormalDistributionLayer  # SoftplusNormalDistributionLayer
       number_of_layers: 1
 
   scale_prior_distibution:
@@ -81,19 +100,24 @@ model_settings:
     params:
       rate: 1.1
 
-  metadata_indices_to_keep: [0,1,2,3,4,5,6,7,8,16]
-  use_positional_encoding: False
-  number_of_frequencies_in_positional_encoding: 6
+  metadata_indices_to_keep: [0,1,2,16,6,7,8] #,3,4,5]
+  use_positional_encoding: true
+  number_of_frequencies_in_positional_encoding: 8
 
 
 dataloader_settings:
-  number_of_shoeboxes_per_batch: 3000
+  number_of_shoeboxes_per_batch: 4000
+  standardize_metadata: true
+  log_p_counts: true
 
 loss_settings:
-  prior_background_weight: 0.02
-  prior_structure_factors_weight: 0.001
+  prior_background_weight: 0.06
+  prior_structure_factors_weight: 0.0005
   prior_scale_weight: 0.0
   prior_profile_weight: 0.04
+  use_negative_binomial_likelihood: false
+  dispersion_parameter: 10.0
+  dispersion_relaxation: 10
 
 phenix_settings:
   r_values_reference_path: "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/pdb_model/refine_001.log"
