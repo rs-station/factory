@@ -1,7 +1,7 @@
 import gemmi
 import pandas as pd
 
-def read_mtz_to_data_frame(file_path: string) -> pd.DataFrame:
+def read_mtz_to_data_frame(file_path: str) -> pd.DataFrame:
 
     mtz = gemmi.read_mtz_file(file_path)
 
