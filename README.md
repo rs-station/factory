@@ -34,8 +34,6 @@ $$\lambda = \Sigma \cdot |F|^2 \cdot p + b$$
 
 a per-reflection **scale** `Σ`, the **structure factor** `|F|`, the spot **profile** `p`, and the **background** `b`. Neural-network encoders infer `Σ`, `p`, and `b` (shared across reflections), while the amplitudes `F` are optimized individually per reflection. Training maximizes the ELBO.
 
-![Graphical model of factory](docs/images/architecture.svg)
-
 ## License
 
 MIT — see [LICENSE](./LICENSE).
