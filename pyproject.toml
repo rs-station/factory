@@ -5,19 +5,45 @@ build-backend = "hatchling.build"
 [project]
 name = "factory"
 version = "0.1.0"
-description = "A factory for crystallographic data processing"
+description = "A unified Bayesian deep-learning model that infers X-ray structure factor amplitudes directly from diffraction images."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = "MIT"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Flavia Giehr" },
+]
+keywords = [
+    "crystallography",
+    "structure-factors",
+    "variational-inference",
+    "bayesian-deep-learning",
+    "pytorch",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Development Status :: 3 - Alpha",
 ]
 dependencies = [
     "torch",
+    "torchvision",
+    "lightning>=2.0",
     "numpy",
-    "gemmi",
     "pandas",
-    "pytorch-lightning",
+    "scipy",
+    "matplotlib",
+    "pillow",
+    "requests",
+    "pyyaml",
+    "omegaconf",
+    "tensordict",
+    "wandb",
+    "gemmi",
+    "biopython",
+    "adabelief-pytorch",
+    "reciprocalspaceship",
+    "rs-distributions",
 ]
 
 [project.optional-dependencies]
@@ -31,8 +57,8 @@ docs = [
     "myst-parser",
 ]
 
-[tool.hatch.version]
-source = "git"
+[project.urls]
+Repository = "https://github.com/rs-station/factory"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/factory"] 
+packages = ["src/factory"]
