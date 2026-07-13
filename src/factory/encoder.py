@@ -1,6 +1,6 @@
 # adapted from Luis Aldama @https://github.com/Hekstra-Lab/integrator.git
 import torch
-    
+
 
 class CNN_3d_(torch.nn.Module):
     def __init__(self, Z=3, H=21, W=21, conv_channels=64, use_norm=True):
@@ -59,7 +59,8 @@ class CNN_3d_(torch.nn.Module):
         x = torch.flatten(x, 1)
 
         return x
-    
+
+
 class CNN_3d(torch.nn.Module):
     def __init__(self, out_dim=64):
         """
@@ -105,8 +106,8 @@ class CNN_3d(torch.nn.Module):
         x = x.view(x.size(0), -1)
         rep = F.relu(self.fc(x))
         return rep
-    
-    
+
+
 class MLP(torch.nn.Module):
     def __init__(self, width, depth, dropout=None, output_dims=None):
         super().__init__()
@@ -131,7 +132,8 @@ class MLP(torch.nn.Module):
         if num_pixels is not None:
             out = out.view(batch_size, num_pixels, -1)  # Reshape back if needed
         return out
-    
+
+
 class ResidualLayer(torch.nn.Module):
     def __init__(self, width, dropout=None):
         super().__init__()
@@ -176,6 +178,7 @@ class MLPMetadataEncoder(torch.nn.Module):
         out = self.layer_norm(out)
         out = self.mlp_1(out)
         return out
+
 
 def main():
     # Test the model
