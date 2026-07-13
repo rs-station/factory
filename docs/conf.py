@@ -227,4 +227,4 @@ def linkcode_resolve(domain, info):
 
     fn = os.path.relpath(fn, start=os.path.dirname("../factory"))
 
-    return f"https://github.com/rs-station/factory/blob/main/factory/{fn}{linespec}"  # noqa 
+    return f"https://github.com/rs-station/factory/blob/main/factory/{fn}{linespec}"  # noqa

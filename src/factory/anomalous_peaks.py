@@ -1,26 +1,29 @@
-import torch
-import pandas as pd
-import numpy as np
-import subprocess
 import os
-import matplotlib.pyplot as plt
+import subprocess
 
-import wandb
-import pytorch_lightning as L
-
-import reciprocalspaceship as rs
-import rs_distributions as rsd
-
-from model import *
 import data_loader
 import get_protein_data
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pytorch_lightning as L
+import reciprocalspaceship as rs
+import rs_distributions as rsd
+import torch
+import wandb
+from model import *
 
-
-print(rs.read_mtz("/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/merged.mtz"))
+print(
+    rs.read_mtz(
+        "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/merged.mtz"
+    )
+)
 
 wandb.init(project="anomalous peaks", name="anomalous-peaks")
 
-artifact = wandb.use_artifact("flaviagiehr-harvard-university/full-model/best_model:latest", type="model")
+artifact = wandb.use_artifact(
+    "flaviagiehr-harvard-university/full-model/best_model:latest", type="model"
+)
 artifact_dir = artifact.download()
 
 ckpt_files = [f for f in os.listdir(artifact_dir) if f.endswith(".ckpt")]
@@ -30,21 +33,27 @@ checkpoint_path = os.path.join(artifact_dir, ckpt_files[0])
 settings = Settings()
 loss_settings = LossSettings()
 
-model = Model.load_from_checkpoint(checkpoint_path, settings=settings, loss_settings=loss_settings)#, dataloader=dataloader)
+model = Model.load_from_checkpoint(
+    checkpoint_path, settings=settings, loss_settings=loss_settings
+)  # , dataloader=dataloader)
 model.eval()
 
 repo_dir = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files"
 mtz_output_path = os.path.join(repo_dir, "phenix_ready.mtz")
 
-surrogate_posterior_dataset = list(model.surrogate_posterior.to_dataset(only_observed=True))[0]
+surrogate_posterior_dataset = list(
+    model.surrogate_posterior.to_dataset(only_observed=True)
+)[0]
 
 # Additional validation checks
 if len(surrogate_posterior_dataset) == 0:
     raise ValueError("Dataset has no reflections!")
 
 # Check if we have the required columns
-required_columns = ['F(+)', 'F(-)', 'SIGF(+)', 'SIGF(-)']
-missing_columns = [col for col in required_columns if col not in surrogate_posterior_dataset.columns]
+required_columns = ["F(+)", "F(-)", "SIGF(+)", "SIGF(-)"]
+missing_columns = [
+    col for col in required_columns if col not in surrogate_posterior_dataset.columns
+]
 if missing_columns:
     raise ValueError(f"Missing required columns: {missing_columns}")
 
@@ -56,13 +65,16 @@ for col in required_columns:
         print(f"Warning: Column {col} contains infinite values")
 
 # Ensure d_min is set
-if not hasattr(surrogate_posterior_dataset, 'd_min') or surrogate_posterior_dataset.d_min is None:
+if (
+    not hasattr(surrogate_posterior_dataset, "d_min")
+    or surrogate_posterior_dataset.d_min is None
+):
     print("Setting d_min to 2.5Å")
     surrogate_posterior_dataset.d_min = 2.5
 
 # Try to get wavelength from the dataset
 wavelength = None
-if hasattr(surrogate_posterior_dataset, 'wavelength'):
+if hasattr(surrogate_posterior_dataset, "wavelength"):
     wavelength = surrogate_posterior_dataset.wavelength
     print(f"\nWavelength from dataset: {wavelength}Å")
 else:
@@ -88,7 +100,9 @@ path_to_pdb_model = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_pe
 
 # mtz_output_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/merged.mtz"  # for the reference peaks
 
-phenix_refine_eff_file_path = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/phenix.eff"
+phenix_refine_eff_file_path = (
+    "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/phenix.eff"
+)
 
 
 cmd = f"source {phenix_env} && cd {repo_dir} && phenix.refine {phenix_refine_eff_file_path} {mtz_output_path} overwrite=True"
@@ -144,33 +158,36 @@ solved_artifact = wandb.Artifact("phenix_solved", type="mtz")
 # from rs_distributions.peak_finding import peak_finder
 
 subprocess.run(
-"rs.find_peaks *[0-9].mtz *[0-9].pdb " f"-f ANOM -p PANOM -z 5.0 -o peaks.csv",
-shell=True,
-cwd=f"{repo_dir}",
+    "rs.find_peaks *[0-9].mtz *[0-9].pdb " f"-f ANOM -p PANOM -z 5.0 -o peaks.csv",
+    shell=True,
+    cwd=f"{repo_dir}",
 )
 
 # Save peaks
-print ("saved peaks")
+print("saved peaks")
 
-peaks_df = pd.read_csv("/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/peaks.csv")
-print(peaks_df.columns)   
+peaks_df = pd.read_csv(
+    "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/peaks.csv"
+)
+print(peaks_df.columns)
 # print(peaks_df.iloc[0])   #
 print(peaks_df)
 
 # Create a nice table of peak heights
-peak_heights_table = pd.DataFrame({
-    'Residue': peaks_df['residue'],
-    'Peak_Height': peaks_df['peakz']
-})
+peak_heights_table = pd.DataFrame(
+    {"Residue": peaks_df["residue"], "Peak_Height": peaks_df["peakz"]}
+)
 
 # Sort by peak height in descending order for better visualization
-peak_heights_table = peak_heights_table.sort_values('Peak_Height', ascending=False).reset_index(drop=True)
+peak_heights_table = peak_heights_table.sort_values(
+    "Peak_Height", ascending=False
+).reset_index(drop=True)
 
 # Add rank column for easier reference
-peak_heights_table.insert(0, 'Rank', range(1, len(peak_heights_table) + 1))
+peak_heights_table.insert(0, "Rank", range(1, len(peak_heights_table) + 1))
 
 # Round peak heights to 3 decimal places for cleaner display
-peak_heights_table['Peak_Height'] = peak_heights_table['Peak_Height'].round(3)
+peak_heights_table["Peak_Height"] = peak_heights_table["Peak_Height"].round(3)
 
 print("\n=== Anomalous Peak Heights ===")
 print(peak_heights_table.to_string(index=False))
@@ -183,6 +200,5 @@ wandb.log({"peak_heights": wandb.Table(dataframe=peak_heights_table)})
 
 
 peaks_artifact = wandb.Artifact("anomalous_peaks", type="peaks")
-peaks_artifact.add_file(os.path.join(repo_dir,"peaks.csv"))
+peaks_artifact.add_file(os.path.join(repo_dir, "peaks.csv"))
 wandb.log_artifact(peaks_artifact)
-

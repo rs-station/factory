@@ -1,26 +1,26 @@
-import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import wandb
 from Bio.PDB import PDBParser
 from scipy.spatial import cKDTree
-import matplotlib.pyplot as plt
-import wandb
 
 wandb.init(project="plot anomolous peaks")
 
-peaks_df = pd.read_csv("/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/peaks.csv")
-print(peaks_df.columns)   
+peaks_df = pd.read_csv(
+    "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/peaks.csv"
+)
+print(peaks_df.columns)
 # print(peaks_df.iloc[0])   #
 print(peaks_df)
 
 # Create a table of peak heights
-peak_heights_table = pd.DataFrame({
-    'Peak_Height': peaks_df['peakz']
-})
+peak_heights_table = pd.DataFrame({"Peak_Height": peaks_df["peakz"]})
 
 # Log the peak heights table to wandb
 wandb.log({"peak_heights": wandb.Table(dataframe=peak_heights_table)})
 
-peak_coords = peaks_df[['cenx', 'ceny', 'cenz']].values
+peak_coords = peaks_df[["cenx", "ceny", "cenz"]].values
 model_file = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/jobs/anomalous_peaks_files/shaken_9b7c_refine_001.pdb"
 parser = PDBParser(QUIET=True)
 model = parser.get_structure("model", model_file)
@@ -41,19 +41,21 @@ matches = []
 for i, peak in enumerate(peak_coords):
     dist, idx = tree.query(peak)
     atom = atoms[idx]
-    matches.append({
-        "Peak_X": peak[0],
-        "Peak_Y": peak[1],
-        "Peak_Z": peak[2],
-        "Peak_Height": peaks_df.loc[i, 'peakz'],  # adjust if column name differs
-        "Atom_Name": atom.get_name(),
-        "Residue": atom.get_parent().get_resname(),
-        "Residue_ID": atom.get_parent().get_id()[1],
-        "Chain": atom.get_parent().get_parent().id,
-        "B_factor": atom.get_bfactor(),
-        "Occupancy": atom.get_occupancy(),
-        "Distance": dist
-    })
+    matches.append(
+        {
+            "Peak_X": peak[0],
+            "Peak_Y": peak[1],
+            "Peak_Z": peak[2],
+            "Peak_Height": peaks_df.loc[i, "peakz"],  # adjust if column name differs
+            "Atom_Name": atom.get_name(),
+            "Residue": atom.get_parent().get_resname(),
+            "Residue_ID": atom.get_parent().get_id()[1],
+            "Chain": atom.get_parent().get_parent().id,
+            "B_factor": atom.get_bfactor(),
+            "Occupancy": atom.get_occupancy(),
+            "Distance": dist,
+        }
+    )
 
 # Create output DataFrame
 results_df = pd.DataFrame(matches)

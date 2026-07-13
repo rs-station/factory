@@ -23,7 +23,9 @@ def run_dials(dials_env, command):
 
 
 def run():
-    refl_file="/n/hekstra_lab/people/aldama/subset/small_dataset/pass1/reflections_.refl"
+    refl_file = (
+        "/n/hekstra_lab/people/aldama/subset/small_dataset/pass1/reflections_.refl"
+    )
     scale_command = (
         f"dials.scale '{refl_file}' '{expt_file}' "
         f"output.reflections='{scaled_refl_out}' "
@@ -36,5 +38,6 @@ def run():
     dials_env = "/n/hekstra_lab/people/aldama/software/dials-v3-16-1/dials_env.sh"
     run_dials(dials_env, scale_command)
 
-if name==main:
+
+if name == main:
     run()
