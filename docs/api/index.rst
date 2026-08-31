@@ -7,4 +7,4 @@ API Reference
    model
    distributions
 
-This section provides detailed API documentation for Factory's modules and functions. 
+This section provides detailed API documentation for Factory's modules and functions.

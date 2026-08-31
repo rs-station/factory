@@ -1,20 +1,19 @@
-import torch
 import math
+
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear
 
+
 class ShoeboxEncoder(nn.Module):
 
-    def __init__(
-        self,
-        input_shape=(3, 21, 21),
-        out_dim=64
-    ):
+    def __init__(self, input_shape=(3, 21, 21), out_dim=64):
         super().__init__()
 
     def forward(self, x):
         pass
+
 
 class BaseShoeboxEncoder(nn.Module):
     def __init__(
@@ -76,6 +75,7 @@ class BaseShoeboxEncoder(nn.Module):
         x = x.view(x.size(0), -1)
         return F.relu(self.fc(x))
 
+
 class SimpleShoeboxEncoder(nn.Module):
     def __init__(
         self,
@@ -134,32 +134,40 @@ class SimpleShoeboxEncoder(nn.Module):
         if torch.isnan(x).any():
             print("WARNING: NaN values in BaseShoeboxEncoder input!")
             print("NaN count:", torch.isnan(x).sum().item())
-        
+
         x = F.relu(self.norm1(self.conv1(x)))
-        
+
         # Check after first conv
         if torch.isnan(x).any():
             print("WARNING: NaN values after conv1 in BaseShoeboxEncoder!")
             print("NaN count:", torch.isnan(x).sum().item())
-        
+
         x = self.pool(x)
         x = F.relu(self.norm2(self.conv2(x)))
-        
+
         # Check after second conv
         if torch.isnan(x).any():
             print("WARNING: NaN values after conv2 in BaseShoeboxEncoder!")
             print("NaN count:", torch.isnan(x).sum().item())
-        
+
         x = x.view(x.size(0), -1)
         x = F.relu(self.fc(x))
-        
+
         # Check final output
         if torch.isnan(x).any():
             print("WARNING: NaN values in BaseShoeboxEncoder output!")
             print("NaN count:", torch.isnan(x).sum().item())
-            print("Stats - min:", x.min().item(), "max:", x.max().item(), "mean:", x.mean().item())
-        
+            print(
+                "Stats - min:",
+                x.min().item(),
+                "max:",
+                x.max().item(),
+                "mean:",
+                x.mean().item(),
+            )
+
         return x
+
 
 class IntensityEncoder(torch.nn.Module):
     def __init__(
