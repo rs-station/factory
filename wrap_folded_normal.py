@@ -1,7 +1,9 @@
-import torch
 from typing import Optional
+
+import torch
 from abismal_torch.surrogate_posterior import FoldedNormalPosterior
 from abismal_torch.symmetry import ReciprocalASUCollection
+
 
 class FrequencyTrackingPosterior(FoldedNormalPosterior):
     def __init__(
@@ -10,11 +12,11 @@ class FrequencyTrackingPosterior(FoldedNormalPosterior):
         loc: torch.Tensor,
         scale: torch.Tensor,
         epsilon: Optional[float] = 1e-12,
-        **kwargs
+        **kwargs,
     ):
         """
         A surrogate posterior that tracks how many times each HKL has been observed.
-        
+
         Args:
             rac (ReciprocalASUCollection): ReciprocalASUCollection.
             loc (torch.Tensor): Unconstrained location parameter of the distribution.
@@ -22,15 +24,15 @@ class FrequencyTrackingPosterior(FoldedNormalPosterior):
             epsilon (float, optional): Epsilon value for numerical stability. Defaults to 1e-12.
         """
         super().__init__(rac, loc, scale, epsilon, **kwargs)
-        
+
         self.register_buffer(
             "observation_count", torch.zeros(self.rac.rac_size, dtype=torch.long)
         )
-    
+
     def update_observed(self, rasu_id: torch.Tensor, H: torch.Tensor) -> None:
         """
         Update both the observed buffer and the observation count.
-        
+
         Args:
             rasu_id (torch.Tensor): A tensor of shape (n_refln,) that contains the
                 rasu ID of each reflection.
@@ -40,7 +42,7 @@ class FrequencyTrackingPosterior(FoldedNormalPosterior):
         observed_idx = self.rac.reflection_id_grid[rasu_id, h, k, l]
         self.observed[observed_idx] = True
         self.observation_count[observed_idx] += 1
-    
+
     def reliable_observations_mask(self, min_observations: int = 5) -> torch.Tensor:
         """
         Returns a boolean tensor indicating which HKLs have been observed enough times
