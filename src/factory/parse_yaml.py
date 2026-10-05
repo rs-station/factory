@@ -1,14 +1,15 @@
-import yaml
 import os
-import wandb
-from settings import ModelSettings, LossSettings, DataLoaderSettings, PhenixSettings
-from abismal_torch.prior import WilsonPrior
+
 import distributions
-import networks
-from lightning.pytorch.loggers import WandbLogger
 import metadata_encoder
+import networks
 import shoebox_encoder
 import torch
+import wandb
+import yaml
+from abismal_torch.prior import WilsonPrior
+from lightning.pytorch.loggers import WandbLogger
+from settings import DataLoaderSettings, LossSettings, ModelSettings, PhenixSettings
 
 REGISTRY = {
     "HalfNormalDistribution": distributions.HalfNormalDistribution,
@@ -34,13 +35,14 @@ REGISTRY = {
     "TorchHalfNormal": torch.distributions.HalfNormal,
     "TorchExponential": torch.distributions.Exponential,
     "rsFoldedNormal": networks.FoldedNormal,
-    
 }
 
+
 def _log_settings_from_yaml(path: str, logger: WandbLogger):
-    with open(path, 'r') as file:
+    with open(path, "r") as file:
         config = yaml.safe_load(file)
     logger.experiment.config.update(config)
+
 
 def instantiate_from_config(config: dict):
     def resolve_value(v):
@@ -60,23 +62,33 @@ def instantiate_from_config(config: dict):
 
 
 def consistancy_check(model_settings_dict: dict):
-    
+
     dmodel = model_settings_dict.get("dmodel")
     metadata_indices = model_settings_dict.get("metadata_indices_to_keep", [])
 
     if "shoebox_encoder" in model_settings_dict:
-        model_settings_dict["shoebox_encoder"].setdefault("params", {})["out_dim"] = dmodel
+        model_settings_dict["shoebox_encoder"].setdefault("params", {})[
+            "out_dim"
+        ] = dmodel
 
     if "metadata_encoder" in model_settings_dict:
         if model_settings_dict.get("use_positional_encoding", False) == True:
-            number_of_frequencies = model_settings_dict.get("number_of_frequencies_in_positional_encoding", 2)
-            model_settings_dict["metadata_encoder"].setdefault("params", {})["feature_dim"] = len(metadata_indices) * number_of_frequencies * 2
+            number_of_frequencies = model_settings_dict.get(
+                "number_of_frequencies_in_positional_encoding", 2
+            )
+            model_settings_dict["metadata_encoder"].setdefault("params", {})[
+                "feature_dim"
+            ] = (len(metadata_indices) * number_of_frequencies * 2)
         else:
-            model_settings_dict["metadata_encoder"].setdefault("params", {})["feature_dim"] = len(metadata_indices)
+            model_settings_dict["metadata_encoder"].setdefault("params", {})[
+                "feature_dim"
+            ] = len(metadata_indices)
         model_settings_dict["metadata_encoder"]["params"]["output_dims"] = dmodel
 
     if "scale_function" in model_settings_dict:
-        model_settings_dict["scale_function"].setdefault("params", {})["input_dimension"] = dmodel
+        model_settings_dict["scale_function"].setdefault("params", {})[
+            "input_dimension"
+        ] = dmodel
 
 
 def load_settings_from_yaml(config):
@@ -84,7 +96,7 @@ def load_settings_from_yaml(config):
     #     config = yaml.safe_load(file)
 
     model_settings_dict = config.get("model_settings", {})
-    
+
     for key, value in model_settings_dict.items():
         if value == "None":
             model_settings_dict[key] = None
@@ -100,7 +112,11 @@ def load_settings_from_yaml(config):
     phenix_settings = PhenixSettings(**config.get("phenix_settings", {}))
 
     dataloader_settings_dict = config.get("dataloader_settings", {})
-    dataloader_settings = DataLoaderSettings(**dataloader_settings_dict) if dataloader_settings_dict else None
+    dataloader_settings = (
+        DataLoaderSettings(**dataloader_settings_dict)
+        if dataloader_settings_dict
+        else None
+    )
 
     return model_settings, loss_settings, phenix_settings, dataloader_settings
 

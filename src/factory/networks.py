@@ -1,10 +1,12 @@
-import torch
-import math
-import torch.nn.functional as F
 import dataclasses
+import math
+
+import torch
+import torch.nn.functional as F
+from tensordict.nn.distributions import Delta
 from torch.distributions import TransformedDistribution
 from torch.distributions.transforms import AbsTransform
-from tensordict.nn.distributions import Delta
+
 
 def weight_initializer(weight):
     fan_avg = 0.5 * (weight.shape[-1] + weight.shape[-2])
@@ -12,8 +14,9 @@ def weight_initializer(weight):
     a = -2.0 * std
     b = 2.0 * std
     torch.nn.init.trunc_normal_(weight, 0.0, std, a, b)
-    
+
     return weight
+
 
 class Linear(torch.nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias=False):
@@ -21,24 +24,39 @@ class Linear(torch.nn.Linear):
 
     def reset_parameters(self) -> None:
         self.weight = weight_initializer(self.weight)
-    
+
     def forward(self, input):
         # Check for NaN values in input
         if torch.isnan(input).any():
             print(f"WARNING: NaN values in Linear layer input! Shape: {input.shape}")
             print("NaN count:", torch.isnan(input).sum().item())
-        
+
         output = super().forward(input)
-        
+
         # Check for NaN values in output
         if torch.isnan(output).any():
             print(f"WARNING: NaN values in Linear layer output! Shape: {output.shape}")
             print("NaN count:", torch.isnan(output).sum().item())
-            print("Weight stats - min:", self.weight.min().item(), "max:", self.weight.max().item(), "mean:", self.weight.mean().item())
+            print(
+                "Weight stats - min:",
+                self.weight.min().item(),
+                "max:",
+                self.weight.max().item(),
+                "mean:",
+                self.weight.mean().item(),
+            )
             if self.bias is not None:
-                print("Bias stats - min:", self.bias.min().item(), "max:", self.bias.max().item(), "mean:", self.bias.mean().item())
-        
+                print(
+                    "Bias stats - min:",
+                    self.bias.min().item(),
+                    "max:",
+                    self.bias.max().item(),
+                    "mean:",
+                    self.bias.mean().item(),
+                )
+
         return output
+
 
 class Constraint(torch.nn.Module):
     def __init__(self, eps=1e-12, beta=1.0):
@@ -58,25 +76,29 @@ class MLP(torch.nn.Module):
         self.input_dim = input_dim
         self.add_bias = True
         self._build_mlp_(number_of_layers=number_of_layers)
-        
+
     def _build_mlp_(self, number_of_layers):
         mlp_layers = []
         for i in range(number_of_layers):
-            mlp_layers.append(torch.nn.Linear(
-                in_features=self.input_dim if i == 0 else self.hidden_dimension,
-                out_features=self.hidden_dimension,
-                bias=self.add_bias,
-            ))
+            mlp_layers.append(
+                torch.nn.Linear(
+                    in_features=self.input_dim if i == 0 else self.hidden_dimension,
+                    out_features=self.hidden_dimension,
+                    bias=self.add_bias,
+                )
+            )
             mlp_layers.append(self.activation)
         self.network = torch.nn.Sequential(*mlp_layers)
-    
+
     def forward(self, x):
         return self.network(x)
-  
+
+
 @dataclasses.dataclass
 class ScaleOutput:
     distribution: torch.distributions.Normal
     network: torch.Tensor
+
 
 class BaseDistributionLayer(torch.nn.Module):
 
@@ -85,7 +107,8 @@ class BaseDistributionLayer(torch.nn.Module):
 
     def forward():
         pass
-     
+
+
 class DeltaDistributionLayer(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -93,10 +116,11 @@ class DeltaDistributionLayer(torch.nn.Module):
         self.bijector = torch.nn.Softplus()
 
     def forward(self, hidden_representation):
-        loc = hidden_representation#torch.unbind(hidden_representation, dim=-1)
+        loc = hidden_representation  # torch.unbind(hidden_representation, dim=-1)
         print("shape los delta dist", loc.shape)
         loc = self.bijector(loc) + 1e-3
         return Delta(param=loc)
+
 
 class NormalDistributionLayer(torch.nn.Module):
     def __init__(self):
@@ -108,6 +132,7 @@ class NormalDistributionLayer(torch.nn.Module):
         loc, scale = torch.unbind(hidden_representation, dim=-1)
         scale = self.bijector(scale) + 1e-3
         return torch.distributions.Normal(loc=loc, scale=scale)
+
 
 class SoftplusNormalDistributionLayer(torch.nn.Module):
     def __init__(self):
@@ -121,6 +146,7 @@ class SoftplusNormalDistributionLayer(torch.nn.Module):
         # self.normal = torch.distributions.Normal(loc=loc, scale=scale)
         return SoftplusNormal(loc=loc, scale=scale)
 
+
 class SoftplusNormal(torch.nn.Module):
     def __init__(self, loc, scale):
         super().__init__()
@@ -130,7 +156,7 @@ class SoftplusNormal(torch.nn.Module):
     def rsample(self, sample_shape=[1]):
         return self.bijector(self.normal.rsample(sample_shape)).unsqueeze(-1)
 
-    def log_prob(self,x):
+    def log_prob(self, x):
         # x: sample (must be > 0), mu and sigma are parameters
         z = torch.log(torch.expm1(x))  # inverse softplus
         normal = self.normal
@@ -140,6 +166,7 @@ class SoftplusNormal(torch.nn.Module):
 
     def forward(self, x, number_of_samples=1):
         return self.bijector(self.normal(x))
+
 
 class TruncatedNormalDistributionLayer(torch.nn.Module):
     def __init__(self):
@@ -153,15 +180,20 @@ class TruncatedNormalDistributionLayer(torch.nn.Module):
         # self.normal = torch.distributions.Normal(loc=loc, scale=scale)
         return PositiveTruncatedNormal(loc=loc, scale=scale)
 
+
 class PositiveTruncatedNormal(torch.nn.Module):
     def __init__(self, loc, scale):
         super().__init__()
         self.normal = torch.distributions.Normal(loc, scale)
         self.a = (0.0 - loc) / scale  # standardized lower bound = 0
-        self.Z = torch.tensor(1.0 - self.normal.cdf(0.0), device=loc.device, dtype=loc.dtype)  # normalization constant
+        self.Z = torch.tensor(
+            1.0 - self.normal.cdf(0.0), device=loc.device, dtype=loc.dtype
+        )  # normalization constant
 
     def rsample(self, sample_shape=torch.Size()):
-        u = torch.rand(sample_shape + self.a.shape, device=self.a.device, dtype=self.a.dtype)
+        u = torch.rand(
+            sample_shape + self.a.shape, device=self.a.device, dtype=self.a.dtype
+        )
         u = u * self.Z + self.normal.cdf(0.0)  # map [0,1] to [cdf(0), 1]
         z = self.normal.icdf(u)
         return z
@@ -169,6 +201,7 @@ class PositiveTruncatedNormal(torch.nn.Module):
     def log_prob(self, x):
         logp = self.normal.log_prob(x)
         return logp - torch.log(self.Z)
+
 
 class NormalIRSample(torch.autograd.Function):
     @staticmethod
@@ -186,6 +219,7 @@ class NormalIRSample(torch.autograd.Function):
         ) = ctx.saved_tensors
         return grad_output * dzdmu, grad_output * dzdsig, None, None, None, None
 
+
 class FoldedNormal(torch.distributions.Distribution):
     """
     Folded Normal distribution class
@@ -197,7 +231,10 @@ class FoldedNormal(torch.distributions.Distribution):
         Default is None.
     """
 
-    arg_constraints = {"loc": torch.distributions.constraints.real, "scale": torch.distributions.constraints.positive}
+    arg_constraints = {
+        "loc": torch.distributions.constraints.real,
+        "scale": torch.distributions.constraints.positive,
+    }
     support = torch.distributions.constraints.nonnegative
 
     def __init__(self, loc, scale, validate_args=None):
@@ -323,6 +360,7 @@ class FoldedNormal(torch.distributions.Distribution):
         samples.requires_grad_(True)
         return self._irsample(self.loc, self.scale, samples, dFdmu, dFdsigma, q)
 
+
 class FoldedNormalDistributionLayer(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -333,6 +371,7 @@ class FoldedNormalDistributionLayer(torch.nn.Module):
         loc, scale = torch.unbind(hidden_representation, dim=-1)
         scale = self.bijector(scale) + 1e-3
         return FoldedNormal(loc=loc.unsqueeze(-1), scale=scale.unsqueeze(-1))
+
 
 class LogNormalDistributionLayer(torch.nn.Module):
     def __init__(self):
@@ -345,11 +384,19 @@ class LogNormalDistributionLayer(torch.nn.Module):
         scale = self.bijector(scale) + 1e-3
         print("lognormal loc, scale", loc.shape, scale.shape)
         dist = torch.distributions.LogNormal(loc=loc, scale=scale)
-        print("torch.distributions.LogNormal(loc=loc, scale=scale)", dist.rsample().shape)
-        dist = torch.distributions.LogNormal(loc=loc.unsqueeze(-1), scale=scale.unsqueeze(-1))
-        print("torch.distributions.LogNormal(loc=loc, scale=scale) unsqueeze", dist.rsample().shape)
+        print(
+            "torch.distributions.LogNormal(loc=loc, scale=scale)", dist.rsample().shape
+        )
+        dist = torch.distributions.LogNormal(
+            loc=loc.unsqueeze(-1), scale=scale.unsqueeze(-1)
+        )
+        print(
+            "torch.distributions.LogNormal(loc=loc, scale=scale) unsqueeze",
+            dist.rsample().shape,
+        )
 
         return dist
+
 
 class GammaDistributionLayer(torch.nn.Module):
     def __init__(self):
@@ -361,10 +408,20 @@ class GammaDistributionLayer(torch.nn.Module):
         concentration, rate = torch.unbind(hidden_representation, dim=-1)
         rate = self.bijector(rate) + 1e-3
         concentration = self.bijector(concentration) + 1e-3
-        return torch.distributions.Gamma(concentration=concentration.unsqueeze(-1), rate=rate.unsqueeze(-1))
+        return torch.distributions.Gamma(
+            concentration=concentration.unsqueeze(-1), rate=rate.unsqueeze(-1)
+        )
+
 
 class MLPScale(torch.nn.Module):
-    def __init__(self, input_dimension=64, scale_distribution=FoldedNormalDistributionLayer, hidden_dimension=64, number_of_layers=1, initial_scale_guess=2/140):
+    def __init__(
+        self,
+        input_dimension=64,
+        scale_distribution=FoldedNormalDistributionLayer,
+        hidden_dimension=64,
+        number_of_layers=1,
+        initial_scale_guess=2 / 140,
+    ):
         super().__init__()
         self.activation = torch.nn.ReLU()
         self.hidden_dimension = hidden_dimension
@@ -377,11 +434,15 @@ class MLPScale(torch.nn.Module):
     def _build_mlp_(self, number_of_layers):
         mlp_layers = []
         for i in range(number_of_layers):
-            mlp_layers.append(torch.nn.Linear(
-                in_features=self.input_dimension if i == 0 else self.hidden_dimension,
-                out_features=self.hidden_dimension,
-                bias=self.add_bias,
-            ))
+            mlp_layers.append(
+                torch.nn.Linear(
+                    in_features=(
+                        self.input_dimension if i == 0 else self.hidden_dimension
+                    ),
+                    out_features=self.hidden_dimension,
+                    bias=self.add_bias,
+                )
+            )
             mlp_layers.append(self.activation)
         self.network = torch.nn.Sequential(*mlp_layers)
 
@@ -391,16 +452,17 @@ class MLPScale(torch.nn.Module):
             out_features=self.scale_distribution_layer.len_params,
             bias=self.add_bias,
         )
-        
 
         if self.add_bias:
             with torch.no_grad():
                 for i in range(self.scale_distribution_layer.len_params):
-                    if i==self.scale_distribution_layer.len_params-1:
-                        final_linear.bias[i] = torch.log(torch.tensor(self.initial_scale_guess))                    
+                    if i == self.scale_distribution_layer.len_params - 1:
+                        final_linear.bias[i] = torch.log(
+                            torch.tensor(self.initial_scale_guess)
+                        )
                     else:
                         final_linear.bias[i] = torch.tensor(0.1)
-        
+
         map_to_distribution_layers.append(final_linear)
         map_to_distribution_layers.append(self.scale_distribution_layer)
 
@@ -408,8 +470,13 @@ class MLPScale(torch.nn.Module):
 
     def forward(self, x) -> ScaleOutput:
         h = self.network(x)
-        print("MLP output:", h.mean().item(), h.min().item(), h.max().item(),
-            "any nan?", torch.isnan(h).any().item())
-        
+        print(
+            "MLP output:",
+            h.mean().item(),
+            h.min().item(),
+            h.max().item(),
+            "any nan?",
+            torch.isnan(h).any().item(),
+        )
+
         return ScaleOutput(distribution=self.distribution(h), network=h)
-    

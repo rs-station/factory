@@ -1,6 +1,7 @@
 import gemmi
 import requests
 
+
 def get_protein_data(url: str):
     response = requests.get(url)
     if not response.ok:
@@ -16,7 +17,8 @@ def get_protein_data(url: str):
     if dmin_str is None:
         raise Exception("Resolution (dmin) not found in the CIF file")
     dmin = float(dmin_str)
-    return{"unit_cell": unit_cell, "spacegroup": spacegroup, "dmin": dmin_str}
+    return {"unit_cell": unit_cell, "spacegroup": spacegroup, "dmin": dmin_str}
+
 
 if __name__ == "__main__":
     data = get_protein_data("https://files.rcsb.org/download/9B7C.cif")
