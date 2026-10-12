@@ -2,6 +2,7 @@
 
 import torch
 
+
 def positional_encoding(X, L):
     """
     X: metadata (batch_size, feature_size)
@@ -15,18 +16,21 @@ def positional_encoding(X, L):
     # Get min and max values along the last dimension
     min_vals = X.min(dim=-1, keepdim=True)[0]
     max_vals = X.max(dim=-1, keepdim=True)[0]
-    
+
     # Normalize between -1 and 1
-    p = 2. * (X - min_vals) / (max_vals - min_vals + 1e-8) - 1.
-    
+    p = 2.0 * (X - min_vals) / (max_vals - min_vals + 1e-8) - 1.0
+
     # Create frequency bands
     L_range = torch.arange(L, dtype=X.dtype, device=X.device)
     f = torch.pi * 2**L_range
-    
+
     # Compute positional encoding
     fp = (f[..., None, :] * p[..., :, None]).reshape(p.shape[:-1] + (-1,))
-    
-    return torch.cat((
-        torch.cos(fp),
-        torch.sin(fp),
-    ), dim=-1)
+
+    return torch.cat(
+        (
+            torch.cos(fp),
+            torch.sin(fp),
+        ),
+        dim=-1,
+    )

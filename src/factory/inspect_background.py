@@ -10,13 +10,14 @@ run with
     dials.python ../factory/src/factory/inspect_background.py
 """
 
-import sys
 import os
-from dials.array_family import flex
-import matplotlib.pyplot as plt
-import wandb
 import statistics
+import sys
+
+import matplotlib.pyplot as plt
 import numpy as np
+import wandb
+from dials.array_family import flex
 from scipy.stats import gamma
 
 
@@ -45,16 +46,24 @@ def main(refl_file):
     print(f"Variance of background.sum.value: {variance:.3f}")
 
     plt.figure(figsize=(8, 5))
-    plt.hist(bg_sum, bins=100, edgecolor='black', alpha=0.6, label='background.sum.value')
-    plt.xlabel('Background Sum Value')
-    plt.ylabel('Count')
-    plt.title('Histogram of background.sum.value')
+    plt.hist(
+        bg_sum, bins=100, edgecolor="black", alpha=0.6, label="background.sum.value"
+    )
+    plt.xlabel("Background Sum Value")
+    plt.ylabel("Count")
+    plt.title("Histogram of background.sum.value")
 
     # Add Gamma distribution histogram
     alpha = 1.9802
     scale = 75.4010
     gamma_samples = gamma.rvs(a=alpha, scale=scale, size=len(bg_sum))
-    plt.hist(gamma_samples, bins=100, edgecolor='red', alpha=0.4, label='Gamma(alpha=1.98, scale=75.4)')
+    plt.hist(
+        gamma_samples,
+        bins=100,
+        edgecolor="red",
+        alpha=0.4,
+        label="Gamma(alpha=1.98, scale=75.4)",
+    )
     plt.legend()
     plt.tight_layout()
 
@@ -62,6 +71,9 @@ def main(refl_file):
     wandb.log({"background_histogram": wandb.Image(plt.gcf())})
     wandb.finish()
 
+
 if __name__ == "__main__":
-    refl_file = "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/scaled.refl"
+    refl_file = (
+        "/n/holylabs/LABS/hekstra_lab/Users/fgiehr/creat_dials_unmerged/scaled.refl"
+    )
     main(refl_file)
