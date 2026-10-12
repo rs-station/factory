@@ -21,4 +21,4 @@ For development installation:
 
    git clone https://github.com/rs-station/factory.git
    cd factory
-   pip install -e ".[test,docs]" 
+   pip install -e ".[test,docs]"
