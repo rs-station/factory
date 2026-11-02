@@ -14,4 +14,4 @@ Here's a simple example of how to use Factory:
    # Create and use your model
    TODO
 
-For more detailed examples and API reference, see the :doc:`api/index` section. 
+For more detailed examples and API reference, see the :doc:`api/index` section.

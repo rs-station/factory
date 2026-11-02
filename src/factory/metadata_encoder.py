@@ -1,8 +1,10 @@
-import torch
 import math
+
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear
+
 
 def weight_initializer(weight):
     fan_avg = 0.5 * (weight.shape[-1] + weight.shape[-2])
@@ -56,6 +58,7 @@ class SimpleResidualLayer(nn.Module):
         out = self.relu(out)
 
         return out
+
 
 class SimpleMetadataEncoder(nn.Module):
     def __init__(self, feature_dim, depth=8, dropout=0.0, output_dims=None):
@@ -122,6 +125,7 @@ class BaseResidualLayer(nn.Module):
 
         return out
 
+
 class BaseMetadataEncoder(nn.Module):
     def __init__(self, feature_dim=2, depth=10, dropout=0.0, output_dims=64):
         super().__init__()
@@ -150,15 +154,29 @@ class BaseMetadataEncoder(nn.Module):
         if torch.isnan(x).any():
             print("WARNING: NaN values in BaseMetadataEncoder input!")
             print("NaN count:", torch.isnan(x).sum().item())
-            print("Stats - min:", x.min().item(), "max:", x.max().item(), "mean:", x.mean().item())
-        
+            print(
+                "Stats - min:",
+                x.min().item(),
+                "max:",
+                x.max().item(),
+                "mean:",
+                x.mean().item(),
+            )
+
         # Process through the model
         x = self.model(x)
-        
+
         # Check output for NaN values
         if torch.isnan(x).any():
             print("WARNING: NaN values in BaseMetadataEncoder output!")
             print("NaN count:", torch.isnan(x).sum().item())
-            print("Stats - min:", x.min().item(), "max:", x.max().item(), "mean:", x.mean().item())
-        
+            print(
+                "Stats - min:",
+                x.min().item(),
+                "max:",
+                x.max().item(),
+                "mean:",
+                x.mean().item(),
+            )
+
         return x
