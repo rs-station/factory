@@ -1,13 +1,11 @@
+import math
+from abc import ABC, abstractmethod
+
+import networks
 import torch
 import torch.nn.functional as F
-import networks
-from networks import Linear
-import math
-
-from networks import Linear, Constraint
-from torch.distributions import HalfNormal, Exponential
-
-from abc import ABC, abstractmethod
+from networks import Constraint, Linear
+from torch.distributions import Exponential, HalfNormal
 
 
 class ProfileDistribution(ABC, torch.nn.Module):
@@ -15,12 +13,16 @@ class ProfileDistribution(ABC, torch.nn.Module):
 
     def __init__(self):
         super().__init__()
-    
+
     def compute_kl_divergence(self, predicted_distribution, target_distribution):
-        try: 
-            return torch.distributions.kl.kl_divergence(predicted_distribution, target_distribution)
+        try:
+            return torch.distributions.kl.kl_divergence(
+                predicted_distribution, target_distribution
+            )
         except NotImplementedError:
-            print("KL divergence not implemented for this distribution: use sampling method.")
+            print(
+                "KL divergence not implemented for this distribution: use sampling method."
+            )
             samples = predicted_distribution.rsample([100])
             log_q = predicted_distribution.log_prob(samples)
             log_p = target_distribution.log_prob(samples)
@@ -30,32 +32,32 @@ class ProfileDistribution(ABC, torch.nn.Module):
     def _update_prior_distributions(self):
         """Update prior distributions to use current device."""
         pass
-    
+
     @abstractmethod
     def kl_divergence_weighted(self, weight):
         """Compute KL divergence between predicted and prior distributions.
-        
+
         Args:
             weight: Weight factor for the KL divergence
         """
         pass
-        
+
     @abstractmethod
     def compute_profile(self, *representations: torch.Tensor) -> torch.Tensor:
         """Compute the profile from the distribution.
-        
+
         Args:
             *representations: Variable number of representations to combine
-            
+
         Returns:
             torch.Tensor: The computed profile normalized to sum to 1
         """
         pass
-        
+
     @abstractmethod
     def forward(self, *representations):
         """Forward pass of the distribution.
-        
+
         Args:
             *representations: Variable number of representations to combine
         """
@@ -63,23 +65,28 @@ class ProfileDistribution(ABC, torch.nn.Module):
 
 
 def compute_kl_divergence(predicted_distribution, target_distribution):
-            try: 
-                # Create proper copies of the distributions
-                # pred_copy = type(predicted_distribution)(
-                #     loc=predicted_distribution.loc.clone(),
-                #     scale=predicted_distribution.scale.clone()
-                # )
-                # target_copy = type(target_distribution)(
-                #     loc=target_distribution.loc.clone(),
-                #     scale=target_distribution.scale.clone()
-                # )
-                return torch.distributions.kl.kl_divergence(predicted_distribution, target_distribution)
-            except NotImplementedError:
-                print("KL divergence not implemented for this distribution: use sampling method.")
-                samples = predicted_distribution.rsample([100])
-                log_q = predicted_distribution.log_prob(samples)
-                log_p = target_distribution.log_prob(samples)
-                return (log_q - log_p).mean(dim=0)
+    try:
+        # Create proper copies of the distributions
+        # pred_copy = type(predicted_distribution)(
+        #     loc=predicted_distribution.loc.clone(),
+        #     scale=predicted_distribution.scale.clone()
+        # )
+        # target_copy = type(target_distribution)(
+        #     loc=target_distribution.loc.clone(),
+        #     scale=target_distribution.scale.clone()
+        # )
+        return torch.distributions.kl.kl_divergence(
+            predicted_distribution, target_distribution
+        )
+    except NotImplementedError:
+        print(
+            "KL divergence not implemented for this distribution: use sampling method."
+        )
+        samples = predicted_distribution.rsample([100])
+        log_q = predicted_distribution.log_prob(samples)
+        log_p = target_distribution.log_prob(samples)
+        return (log_q - log_p).mean(dim=0)
+
 
 class DirichletProfile(ProfileDistribution):
     """
@@ -96,21 +103,29 @@ class DirichletProfile(ProfileDistribution):
             #     param.requires_grad = False
         self.dmodel = dmodel
         self.eps = 1e-6
-        concentration_vector[concentration_vector>torch.quantile(concentration_vector, 0.99)] *= 40
+        concentration_vector[
+            concentration_vector > torch.quantile(concentration_vector, 0.99)
+        ] *= 40
         concentration_vector /= concentration_vector.max()
-        self.register_buffer("concentration", concentration_vector) #.reshape((21,21,3)))
+        self.register_buffer(
+            "concentration", concentration_vector
+        )  # .reshape((21,21,3)))
         self.q_p = None
-    
+
     def _update_prior_distributions(self):
         """Update prior distributions to use current device."""
         self.dirichlet_prior = torch.distributions.Dirichlet(self.concentration)
-    
+
     def kl_divergence_weighted(self, weight):
         self._update_prior_distributions()
 
-        print("shape inot kl profile", self.q_p.sample().shape, self.dirichlet_prior.sample().shape)
-        return self.compute_kl_divergence(self.q_p, self.dirichlet_prior)* weight
-    
+        print(
+            "shape inot kl profile",
+            self.q_p.sample().shape,
+            self.dirichlet_prior.sample().shape,
+        )
+        return self.compute_kl_divergence(self.q_p, self.dirichlet_prior) * weight
+
     def compute_profile(self, *representations: torch.Tensor) -> torch.Tensor:
         dirichlet_profile = self.forward(*representations)
         return dirichlet_profile
@@ -120,44 +135,68 @@ class DirichletProfile(ProfileDistribution):
         # return avg_profile
 
     def forward(self, *representations):
-        alphas = sum(representations) if len(representations) > 1 else representations[0]
+        alphas = (
+            sum(representations) if len(representations) > 1 else representations[0]
+        )
         print("alpha shape", alphas.shape)
-        
+
         # Check for NaN values in input representations
         if torch.isnan(alphas).any():
             print("WARNING: NaN values detected in input representations!")
             print("NaN count:", torch.isnan(alphas).sum().item())
-            print("Input stats - min:", alphas.min().item(), "max:", alphas.max().item(), "mean:", alphas.mean().item())
-        
+            print(
+                "Input stats - min:",
+                alphas.min().item(),
+                "max:",
+                alphas.max().item(),
+                "mean:",
+                alphas.mean().item(),
+            )
+
         if self.dmodel is not None:
             alphas = self.alpha_layer(alphas)
             # Check for NaN values after linear layer
             if torch.isnan(alphas).any():
                 print("WARNING: NaN values detected after alpha_layer!")
                 print("NaN count:", torch.isnan(alphas).sum().item())
-                print("Alpha layer output stats - min:", alphas.min().item(), "max:", alphas.max().item(), "mean:", alphas.mean().item())
-        
+                print(
+                    "Alpha layer output stats - min:",
+                    alphas.min().item(),
+                    "max:",
+                    alphas.max().item(),
+                    "mean:",
+                    alphas.mean().item(),
+                )
+
         alphas = F.softplus(alphas) + self.eps
         print("profile alphas shape", alphas.shape)
-        
+
         # Check for NaN values after softplus
         if torch.isnan(alphas).any():
             print("WARNING: NaN values detected after softplus!")
             print("NaN count:", torch.isnan(alphas).sum().item())
-            print("Softplus output stats - min:", alphas.min().item(), "max:", alphas.max().item(), "mean:", alphas.mean().item())
-            
+            print(
+                "Softplus output stats - min:",
+                alphas.min().item(),
+                "max:",
+                alphas.max().item(),
+                "mean:",
+                alphas.mean().item(),
+            )
+
             # Replace NaN values with a safe default
-        
+
         # Ensure all values are positive and finite
-        
+
         self.q_p = torch.distributions.Dirichlet(alphas)
         print("profile q_p shape", self.q_p.rsample().shape)
         return self.q_p
 
+
 class Distribution(torch.nn.Module):
     def __init__(self):
         super().__init__()
-    
+
     def forward(self, representation):
         pass
 
@@ -187,6 +226,7 @@ class HalfNormalDistribution(torch.nn.Module):
         params = self.fc(representation)
         norm = self.distribution(params)
         return norm
+
 
 class ExponentialDistribution(torch.nn.Module):
     def __init__(
@@ -232,7 +272,7 @@ class LRMVN_Distribution(torch.nn.Module):
 
         self.d = 3
         self.h = 21
-        self.w = 21	
+        self.w = 21
 
         z_coords = torch.arange(self.d).float() - (self.d - 1) / 2
         y_coords = torch.arange(self.h).float() - (self.h - 1) / 2
@@ -250,11 +290,11 @@ class LRMVN_Distribution(torch.nn.Module):
         self.register_buffer("pixel_positions", pixel_positions)
 
         # Initialize prior distributions
-        self.register_buffer('prior_mvn_mean_loc', torch.tensor(0.0))
-        self.register_buffer('prior_mvn_mean_scale', torch.tensor(5.0))
-        self.register_buffer('prior_mvn_cov_factor_loc', torch.tensor(0.0))
-        self.register_buffer('prior_mvn_cov_factor_scale', torch.tensor(0.01))
-        self.register_buffer('prior_mvn_cov_scale_scale', torch.tensor(0.01))
+        self.register_buffer("prior_mvn_mean_loc", torch.tensor(0.0))
+        self.register_buffer("prior_mvn_mean_scale", torch.tensor(5.0))
+        self.register_buffer("prior_mvn_cov_factor_loc", torch.tensor(0.0))
+        self.register_buffer("prior_mvn_cov_factor_scale", torch.tensor(0.01))
+        self.register_buffer("prior_mvn_cov_scale_scale", torch.tensor(0.01))
 
         self.mvn_mean_mean_layer = Linear(
             in_features=self.hidden_dim,
@@ -280,17 +320,15 @@ class LRMVN_Distribution(torch.nn.Module):
     def _update_prior_distributions(self):
         """Update prior distributions to use current device."""
         self.prior_mvn_mean = torch.distributions.Normal(
-            loc=self.prior_mvn_mean_loc,
-            scale=self.prior_mvn_mean_scale
+            loc=self.prior_mvn_mean_loc, scale=self.prior_mvn_mean_scale
         )
         self.prior_mvn_cov_factor = torch.distributions.Normal(
-            loc=self.prior_mvn_cov_factor_loc,
-            scale=self.prior_mvn_cov_factor_scale
+            loc=self.prior_mvn_cov_factor_loc, scale=self.prior_mvn_cov_factor_scale
         )
         self.prior_mvn_cov_scale = torch.distributions.HalfNormal(
             scale=self.prior_mvn_cov_scale_scale
         )
-        
+
     def kl_divergence_weighted(self, weights):
         """Compute the KL divergence between the predicted and prior distributions.
 
@@ -300,15 +338,22 @@ class LRMVN_Distribution(torch.nn.Module):
         Returns:
             torch.Tensor: The weighted sum of KL divergences
         """
-        _kl_divergence = compute_kl_divergence(
-            self.mvn_mean_distribution, self.prior_mvn_mean
-        ).sum() * weights[0]    
-        _kl_divergence += compute_kl_divergence(
-            self.mvn_cov_factor_distribution, self.prior_mvn_cov_factor
-        ).sum() * weights[1]
-        _kl_divergence += compute_kl_divergence(
-            self.mvn_cov_scale_distribution, self.prior_mvn_cov_scale
-        ).sum() * weights[2]
+        _kl_divergence = (
+            compute_kl_divergence(self.mvn_mean_distribution, self.prior_mvn_mean).sum()
+            * weights[0]
+        )
+        _kl_divergence += (
+            compute_kl_divergence(
+                self.mvn_cov_factor_distribution, self.prior_mvn_cov_factor
+            ).sum()
+            * weights[1]
+        )
+        _kl_divergence += (
+            compute_kl_divergence(
+                self.mvn_cov_scale_distribution, self.prior_mvn_cov_scale
+            ).sum()
+            * weights[2]
+        )
         return _kl_divergence
 
     def compute_profile(self, *representations: torch.Tensor) -> torch.Tensor:
@@ -334,26 +379,38 @@ class LRMVN_Distribution(torch.nn.Module):
         avg_profile = profile.mean(dim=1)
         avg_profile = avg_profile / (avg_profile.sum(dim=-1, keepdim=True) + 1e-10)
 
-        return profile_mvn_distribution #profile
+        return profile_mvn_distribution  # profile
 
-    def forward(self, *representations: torch.Tensor) -> torch.distributions.LowRankMultivariateNormal:
+    def forward(
+        self, *representations: torch.Tensor
+    ) -> torch.distributions.LowRankMultivariateNormal:
         """Forward pass of the LRMVN distribution."""
         # Update prior distributions to ensure they're on the correct device
         self._update_prior_distributions()
-        
+
         self.batch_size = representations[0].shape[0]
 
         # Combine all representations if more than one is provided
-        combined_representation = sum(representations) if len(representations) > 1 else representations[0]
+        combined_representation = (
+            sum(representations) if len(representations) > 1 else representations[0]
+        )
 
         mvn_mean_mean = self.mvn_mean_mean_layer(representations[0]).unsqueeze(-1)
-        mvn_mean_std = F.softplus(self.mvn_mean_std_layer(representations[0])).unsqueeze(-1)
+        mvn_mean_std = F.softplus(
+            self.mvn_mean_std_layer(representations[0])
+        ).unsqueeze(-1)
 
-        mvn_cov_factor_mean = self.mvn_cov_factor_mean_layer(combined_representation).unsqueeze(-1)
-        mvn_cov_factor_std = F.softplus(self.mvn_cov_factor_std_layer(combined_representation)).unsqueeze(-1)
+        mvn_cov_factor_mean = self.mvn_cov_factor_mean_layer(
+            combined_representation
+        ).unsqueeze(-1)
+        mvn_cov_factor_std = F.softplus(
+            self.mvn_cov_factor_std_layer(combined_representation)
+        ).unsqueeze(-1)
 
         # for the inverse gammas
-        mvn_cov_scale_parameter = F.softplus(self.mvn_cov_diagonal_scale_layer(representations[0])).unsqueeze(-1)
+        mvn_cov_scale_parameter = F.softplus(
+            self.mvn_cov_diagonal_scale_layer(representations[0])
+        ).unsqueeze(-1)
 
         self.mvn_mean_distribution = torch.distributions.Normal(
             loc=mvn_mean_mean,
@@ -368,16 +425,31 @@ class LRMVN_Distribution(torch.nn.Module):
         self.mvn_cov_scale_distribution = torch.distributions.half_normal.HalfNormal(
             scale=mvn_cov_scale_parameter,
         )
-        mvn_mean_samples = self.mvn_mean_distribution.rsample([self.number_of_mc_samples]).squeeze(-1).permute(1, 0, 2)
-        mvn_cov_factor_samples = self.mvn_cov_factor_distribution.rsample([self.number_of_mc_samples]).permute(1, 0, 2, 3)
+        mvn_mean_samples = (
+            self.mvn_mean_distribution.rsample([self.number_of_mc_samples])
+            .squeeze(-1)
+            .permute(1, 0, 2)
+        )
+        mvn_cov_factor_samples = self.mvn_cov_factor_distribution.rsample(
+            [self.number_of_mc_samples]
+        ).permute(1, 0, 2, 3)
         diag_samples = (
-            self.mvn_cov_scale_distribution.rsample([self.number_of_mc_samples]).squeeze(-1).permute(1, 0, 2) + 1e-6
+            self.mvn_cov_scale_distribution.rsample([self.number_of_mc_samples])
+            .squeeze(-1)
+            .permute(1, 0, 2)
+            + 1e-6
         )
         self.profile_mvn_distribution = (
             torch.distributions.lowrank_multivariate_normal.LowRankMultivariateNormal(
-                loc=mvn_mean_samples.view(self.batch_size, self.number_of_mc_samples, 1, 3),
-                cov_factor=mvn_cov_factor_samples.view(self.batch_size, self.number_of_mc_samples, 1, 3, 1),
-                cov_diag=diag_samples.view(self.batch_size, self.number_of_mc_samples, 1, 3),
+                loc=mvn_mean_samples.view(
+                    self.batch_size, self.number_of_mc_samples, 1, 3
+                ),
+                cov_factor=mvn_cov_factor_samples.view(
+                    self.batch_size, self.number_of_mc_samples, 1, 3, 1
+                ),
+                cov_diag=diag_samples.view(
+                    self.batch_size, self.number_of_mc_samples, 1, 3
+                ),
             )
         )
 
@@ -387,12 +459,12 @@ class LRMVN_Distribution(torch.nn.Module):
         super().to(*args, **kwargs)
         # Get device from the first parameter
         device = next(self.parameters()).device
-        
+
         # Move all registered buffers
         for name, buffer in self.named_buffers():
             setattr(self, name, buffer.to(device))
-            
+
         # Update prior distributions
         self._update_prior_distributions()
-        
+
         return self
